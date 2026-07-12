@@ -36,7 +36,16 @@ export default function App() {
     const saved = localStorage.getItem('hs_handmade_products');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const loaded: Product[] = JSON.parse(saved);
+        const defaults = getInitialProducts();
+        // Upgrade any default products that are still using old base64 SVGs to the new static images
+        return loaded.map(p => {
+          const def = defaults.find(d => d.id === p.id);
+          if (def && p.images.some(img => img.startsWith('data:'))) {
+            return { ...p, images: def.images };
+          }
+          return p;
+        });
       } catch (e) {
         console.error('Error loading products from local storage', e);
       }

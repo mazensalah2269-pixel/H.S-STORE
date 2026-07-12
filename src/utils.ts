@@ -208,9 +208,9 @@ export const getInitialProducts = (): Product[] => {
       price: 120,
       description: 'An exquisitely soft wool shawl hand-embroidered with traditional floral motifs. Designed in an oversized profile for cozy comfort and dramatic drape.',
       images: [
-        generateHandmadeSVG('shawl', '#8C1D2F', '#D4AF37', 'full'), // Deep Crimson and Gold
-        generateHandmadeSVG('shawl', '#8C1D2F', '#D4AF37', 'texture'),
-        generateHandmadeSVG('shawl', '#8C1D2F', '#D4AF37', 'detail'),
+        '/images/shawl_crimson_full.jpg',
+        '/images/shawl_crimson_texture.jpg',
+        '/images/shawl_crimson_detail.jpg',
       ],
       createdAt: new Date('2026-01-10').toISOString(),
     },
@@ -221,9 +221,9 @@ export const getInitialProducts = (): Product[] => {
       price: 45,
       description: 'Beautifully textured loop scarf knit from 100% organic extra-fine merino wool. Extremely warm, chunky, and skin-friendly in winter weather.',
       images: [
-        generateHandmadeSVG('shawl', '#2C5E5A', '#E2D4C9', 'full'), // Warm Teal and Creams
-        generateHandmadeSVG('shawl', '#2C5E5A', '#E2D4C9', 'texture'),
-        generateHandmadeSVG('shawl', '#2C5E5A', '#E2D4C9', 'detail'),
+        '/images/scarf_teal_full.jpg',
+        '/images/scarf_teal_texture.jpg',
+        '/images/scarf_teal_detail.jpg',
       ],
       createdAt: new Date('2026-02-15').toISOString(),
     },
@@ -234,9 +234,9 @@ export const getInitialProducts = (): Product[] => {
       price: 160,
       description: 'A complete luxury winter ensemble featuring matching ribbed merino beanie, folded long scarf, and wool mittens, coordinated in rich forest tones.',
       images: [
-        generateHandmadeSVG('set', '#1C3A27', '#E2C2A4', 'full'), // Forest Green and Sand Accents
-        generateHandmadeSVG('set', '#1C3A27', '#E2C2A4', 'texture'),
-        generateHandmadeSVG('set', '#1C3A27', '#E2C2A4', 'detail'),
+        '/images/set_forest_full.jpg',
+        '/images/set_forest_texture.jpg',
+        '/images/set_forest_detail.jpg',
       ],
       createdAt: new Date('2026-03-01').toISOString(),
     },
@@ -247,9 +247,9 @@ export const getInitialProducts = (): Product[] => {
       price: 140,
       description: 'Beautifully soft pastel colored headbands, matching scarf, and cozy hand-warmers crocheted carefully with premium cotton-wool blend thread.',
       images: [
-        generateHandmadeSVG('set', '#D4A59A', '#9BB7D4', 'full'), // Blush Pink and Sky Blue
-        generateHandmadeSVG('set', '#D4A59A', '#9BB7D4', 'texture'),
-        generateHandmadeSVG('set', '#D4A59A', '#9BB7D4', 'detail'),
+        '/images/set_pastel_full.jpg',
+        '/images/set_pastel_texture.jpg',
+        '/images/set_pastel_detail.jpg',
       ],
       createdAt: new Date('2026-03-20').toISOString(),
     },
@@ -260,9 +260,9 @@ export const getInitialProducts = (): Product[] => {
       price: 75,
       description: 'Made with fine 100% cotton cords hung on a natural driftwood branch. This modern chic wall tapestry adds a warm artisanal energy to any room.',
       images: [
-        generateHandmadeSVG('gift', '#C19A6B', '#664C28', 'full'), // Wood and Cord tones
-        generateHandmadeSVG('gift', '#C19A6B', '#664C28', 'texture'),
-        generateHandmadeSVG('gift', '#C19A6B', '#664C28', 'detail'),
+        '/images/gift_tapestry_full.jpg',
+        '/images/gift_tapestry_texture.jpg',
+        '/images/gift_tapestry_detail.jpg',
       ],
       createdAt: new Date('2026-04-05').toISOString(),
     },
@@ -273,9 +273,9 @@ export const getInitialProducts = (): Product[] => {
       price: 95,
       description: 'A beautiful woven gift tray carrying hand-poured soy candles, lavender organic bundle, a custom knit sachet, and a handwritten personalized greeting card.',
       images: [
-        generateHandmadeSVG('gift', '#7F679F', '#EFE9F5', 'full'), // Lavender & Cream
-        generateHandmadeSVG('gift', '#7F679F', '#EFE9F5', 'texture'),
-        generateHandmadeSVG('gift', '#7F679F', '#EFE9F5', 'detail'),
+        '/images/gift_hamper_full.jpg',
+        '/images/gift_hamper_texture.jpg',
+        '/images/gift_hamper_detail.jpg',
       ],
       createdAt: new Date('2026-05-12').toISOString(),
     }
