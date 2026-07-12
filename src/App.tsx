@@ -41,7 +41,7 @@ export default function App() {
         // Upgrade any default products that are still using old base64 SVGs to the new static images
         return loaded.map(p => {
           const def = defaults.find(d => d.id === p.id);
-          if (def && p.images.some(img => img.startsWith('data:'))) {
+          if (def && p.images.some(img => img.startsWith('data:image/svg+xml'))) {
             return { ...p, images: def.images };
           }
           return p;
@@ -90,6 +90,7 @@ export default function App() {
   const [formDescription, setFormDescription] = useState('');
   const [formImages, setFormImages] = useState<string[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState<boolean>(false);
 
   // Carousel slider positions per product ID
   const [carouselIndexes, setCarouselIndexes] = useState<Record<string, number>>({});
@@ -171,31 +172,60 @@ export default function App() {
     setIsProductModalOpen(true);
   };
 
-  // Handle files selection
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle files selection with direct backend upload
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
-    const loadedBase64s: string[] = [];
-    let processedCount = 0;
+    setIsUploading(true);
+    setFormError(null);
 
-    Array.from(files).forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        if (event.target?.result && typeof event.target.result === 'string') {
-          loadedBase64s.push(event.target.result);
-        }
-        processedCount++;
-        if (processedCount === files.length) {
-          setFormImages(prev => [...prev, ...loadedBase64s]);
-          // Reset file input value so same files can be chosen again if deleted
-          if (fileInputRef.current) {
-            fileInputRef.current.value = '';
-          }
-        }
-      };
-      reader.readAsDataURL(file as Blob);
-    });
+    try {
+      const uploadPromises = Array.from(files).map((file: File) => {
+        return new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = async (event) => {
+            if (event.target?.result && typeof event.target.result === 'string') {
+              try {
+                const response = await fetch('/api/upload', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    filename: file.name,
+                    base64: event.target.result,
+                  }),
+                });
+                
+                if (!response.ok) {
+                  throw new Error(`Upload failed for ${file.name}`);
+                }
+                
+                const data = await response.json();
+                resolve(data.url);
+              } catch (err) {
+                reject(err);
+              }
+            } else {
+              reject(new Error('Failed to read file as base64'));
+            }
+          };
+          reader.onerror = () => reject(new Error('FileReader error'));
+          reader.readAsDataURL(file as Blob);
+        });
+      });
+
+      const uploadedUrls = await Promise.all(uploadPromises);
+      setFormImages(prev => [...prev, ...uploadedUrls]);
+    } catch (err: any) {
+      console.error('File upload error:', err);
+      setFormError(err.message || 'Error uploading files to backend');
+    } finally {
+      setIsUploading(false);
+      // Reset file input value so same files can be chosen again if deleted
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
   };
 
   const removeFormImage = (indexToRemove: number) => {
@@ -895,21 +925,34 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* IMAGE UPLOAD PANEL (strict file pickers, local base64, multiple supported) */}
+                {/* IMAGE UPLOAD PANEL (strict file pickers, direct server upload, multiple supported) */}
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-brand-accent mb-1.5">
-                    Direct Image Uploads (Converted to Local Base64) *
-                  </label>
+                  <div className="flex justify-between items-center mb-1.5">
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-brand-accent">
+                      Direct Image Uploads (Saved to Server /images/) *
+                    </label>
+                    {isUploading && (
+                      <span className="text-[10px] bg-brand-accent/10 text-brand-accent px-2 py-0.5 animate-pulse font-mono uppercase tracking-wider">
+                        Uploading to server...
+                      </span>
+                    )}
+                  </div>
                   
                   {/* Drag-drop or click box */}
                   <div
-                    onClick={() => fileInputRef.current?.click()}
-                    className="border-2 border-dashed border-brand-ink/15 hover:border-brand-accent bg-brand-bg hover:bg-white p-6 rounded-none cursor-pointer text-center transition-all duration-150"
+                    onClick={() => !isUploading && fileInputRef.current?.click()}
+                    className={`border-2 border-dashed rounded-none p-6 text-center transition-all duration-150 ${
+                      isUploading 
+                        ? 'border-brand-ink/10 bg-brand-bg/50 cursor-not-allowed opacity-60' 
+                        : 'border-brand-ink/15 hover:border-brand-accent bg-brand-bg hover:bg-white cursor-pointer'
+                    }`}
                   >
-                    <Upload className="w-8 h-8 text-brand-ink/30 mx-auto mb-2 stroke-1" />
-                    <p className="text-xs font-bold text-brand-ink/80 uppercase tracking-wider">Click to upload from your device</p>
+                    <Upload className={`w-8 h-8 mx-auto mb-2 stroke-1 ${isUploading ? 'text-brand-ink/20 animate-bounce' : 'text-brand-ink/30'}`} />
+                    <p className="text-xs font-bold text-brand-ink/80 uppercase tracking-wider">
+                      {isUploading ? 'Uploading files...' : 'Click to upload from your device'}
+                    </p>
                     <p className="text-[10px] text-brand-ink/50 mt-1">
-                      Supports multiple photos. Files are compiled and saved securely to LocalStorage.
+                      Supports multiple photos. Files are written directly to /public/images/ on the backend and exported.
                     </p>
                     
                     <input
@@ -917,6 +960,7 @@ export default function App() {
                       type="file"
                       multiple
                       accept="image/*"
+                      disabled={isUploading}
                       onChange={handleFileChange}
                       className="hidden"
                     />
@@ -933,14 +977,15 @@ export default function App() {
                       </div>
                       
                       <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-5 gap-3">
-                        {formImages.map((base64, index) => (
+                        {formImages.map((srcUrl, index) => (
                           <div 
                             key={index} 
                             className="group relative aspect-square rounded-none overflow-hidden border border-brand-ink/10 shadow-xs"
                           >
                             <img
-                              src={base64}
+                              src={srcUrl}
                               alt="Upload preview"
+                              referrerPolicy="no-referrer"
                               className="w-full h-full object-cover"
                             />
                             {/* Delete specific image button */}
