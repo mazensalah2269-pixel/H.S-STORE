@@ -1,0 +1,6 @@
+{
+  "name": "H.S HandMade",
+  "description": "A premium catalog and product management website for high-quality handmade shawls, scarves, sets, and gifts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
