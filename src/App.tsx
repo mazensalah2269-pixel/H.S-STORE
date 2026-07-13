@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   Plus, 
@@ -107,6 +107,26 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('hs_handmade_products', JSON.stringify(products));
   }, [products]);
+
+  // Expose renderAppGridDisplay globally to dynamically load and display the latest products database
+  const renderAppGridDisplay = useCallback(() => {
+    const saved = localStorage.getItem('hs_handmade_products');
+    if (saved) {
+      try {
+        const loaded: Product[] = JSON.parse(saved);
+        setProducts(loaded);
+      } catch (e) {
+        console.error('Error in renderAppGridDisplay loading products', e);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    (window as any).renderAppGridDisplay = renderAppGridDisplay;
+    return () => {
+      delete (window as any).renderAppGridDisplay;
+    };
+  }, [renderAppGridDisplay]);
 
   // Admin authentication state
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
@@ -239,23 +259,36 @@ export default function App() {
 
   // Delete product: instant, immediate, no confirmations!
   const handleDeleteProduct = (productId: string) => {
-    setProducts(prev => prev.filter(p => p.id !== productId));
+    const updated = products.filter(p => p.id !== productId);
+    localStorage.setItem('hs_handmade_products', JSON.stringify(updated));
+    setProducts(updated);
+    
     // Also clean up state
     setCarouselIndexes(prev => {
       const copy = { ...prev };
       delete copy[productId];
       return copy;
     });
+
+    if (typeof (window as any).renderAppGridDisplay === 'function') {
+      (window as any).renderAppGridDisplay();
+    }
   };
 
   // Update product inventory status instantly
   const handleUpdateProductStatus = (productId: string, status: 'instock' | 'outofstock') => {
-    setProducts(prev => prev.map(p => {
+    const updated = products.map(p => {
       if (p.id === productId) {
         return { ...p, status };
       }
       return p;
-    }));
+    });
+    localStorage.setItem('hs_handmade_products', JSON.stringify(updated));
+    setProducts(updated);
+
+    if (typeof (window as any).renderAppGridDisplay === 'function') {
+      (window as any).renderAppGridDisplay();
+    }
   };
 
   // Cart operations
@@ -520,9 +553,10 @@ export default function App() {
 
     const discountValue = formDiscountPercentage === '' ? 0 : Number(formDiscountPercentage);
 
+    let updatedProducts: Product[] = [];
     if (editingProduct) {
       // Edit mode
-      setProducts(prev => prev.map(p => {
+      updatedProducts = products.map(p => {
         if (p.id === editingProduct.id) {
           return {
             ...p,
@@ -536,7 +570,7 @@ export default function App() {
           };
         }
         return p;
-      }));
+      });
     } else {
       // Create mode
       const newProduct: Product = {
@@ -550,11 +584,18 @@ export default function App() {
         status: 'instock',
         discountPercentage: discountValue,
       };
-      setProducts(prev => [newProduct, ...prev]);
+      updatedProducts = [newProduct, ...products];
     }
+
+    localStorage.setItem('hs_handmade_products', JSON.stringify(updatedProducts));
+    setProducts(updatedProducts);
 
     setIsProductModalOpen(false);
     setEditingProduct(null);
+
+    if (typeof (window as any).renderAppGridDisplay === 'function') {
+      (window as any).renderAppGridDisplay();
+    }
   };
 
   // Helper to filter and sort products
