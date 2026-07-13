@@ -83,37 +83,41 @@ async function verifySecondPassword(input: string): Promise<boolean> {
   }
 }
 
+/**
+ * ---------------------------------------------------------------------------------
+ * CLOUD_DATABASE_URL Configuration
+ * ---------------------------------------------------------------------------------
+ * Paste your free cloud JSON database REST API URL below (e.g. from jsonblob.com,
+ * jsonbin.io, kvdb.io, or any custom API).
+ * 
+ * Step-by-Step Guide to get your free Cloud Database:
+ * 1. Go to https://jsonblob.com
+ * 2. Click on "Create" or paste a valid JSON array of your products.
+ * 3. Save the blob and copy the API endpoint URL.
+ *    (Format: https://jsonblob.com/api/jsonBlob/YOUR_UNIQUE_BLOB_ID)
+ * 4. Paste the copied URL below as the value for CLOUD_DATABASE_URL.
+ * 5. That's it! Any price, discount, or stock updates made by the Admin will
+ *    be synced globally for all customers in real-time instantly.
+ * ---------------------------------------------------------------------------------
+ */
+const CLOUD_DATABASE_URL: string = "YOUR_DATABASE_URL_HERE";
+
+// Determine the active database URL
+const getActiveDatabaseUrl = () => {
+  if (CLOUD_DATABASE_URL && CLOUD_DATABASE_URL !== "YOUR_DATABASE_URL_HERE" && CLOUD_DATABASE_URL.trim() !== "") {
+    return CLOUD_DATABASE_URL.trim();
+  }
+  return localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
+};
+
 export default function App() {
   // Cloud Database URL State (zero-configuration, saves permanently to localStorage)
   const [cloudDbUrl, setCloudDbUrl] = useState(() => {
     return localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
   });
 
-  const [products, setProducts] = useState<Product[]>(() => {
-    const saved = localStorage.getItem('hs_handmade_products');
-    if (saved) {
-      try {
-        const loaded: Product[] = JSON.parse(saved);
-        const defaults = getInitialProducts();
-        // Upgrade any default products that are still using old base64 SVGs to the new static images
-        return loaded.map(p => {
-          const def = defaults.find(d => d.id === p.id);
-          if (def && p.images.some(img => img.startsWith('data:image/svg+xml'))) {
-            return { ...p, images: def.images };
-          }
-          return p;
-        });
-      } catch (e) {
-        console.error('Error loading products from local storage', e);
-      }
-    }
-    return getInitialProducts();
-  });
-
-  // Persist products to localStorage
-  useEffect(() => {
-    localStorage.setItem('hs_handmade_products', JSON.stringify(products));
-  }, [products]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Synchronize products array with the configured Cloud Database URL
   const syncFromCloud = useCallback(async (targetUrl: string) => {
@@ -139,9 +143,16 @@ export default function App() {
   // Fetch the latest database state on mount (Approach B Cloud Sync)
   useEffect(() => {
     async function initSync() {
-      // 1. Fetch from the zero-config Cloud Database
-      const cloudProducts = await syncFromCloud(cloudDbUrl);
-      if (cloudProducts) return;
+      setIsLoading(true);
+      const activeUrl = getActiveDatabaseUrl();
+      console.log('Loading products from cloud database:', activeUrl);
+
+      // 1. Fetch from main cloud database
+      const cloudProducts = await syncFromCloud(activeUrl);
+      if (cloudProducts) {
+        setIsLoading(false);
+        return;
+      }
 
       // 2. Fallback to server-side local Express endpoint
       try {
@@ -153,23 +164,32 @@ export default function App() {
             localStorage.setItem('hs_handmade_products', JSON.stringify(serverProducts));
             
             // Sync current cloud storage with the database if it is empty
-            await fetch(cloudDbUrl, {
+            await fetch(activeUrl, {
               method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(serverProducts)
-            });
+            }).catch(() => {});
+
+            setIsLoading(false);
+            return;
           }
         }
       } catch (err) {
         console.error('Failed to sync products from backup server:', err);
       }
+
+      // 3. Absolute fallback: get default initial products
+      const defaults = getInitialProducts();
+      setProducts(defaults);
+      setIsLoading(false);
     }
     initSync();
   }, [cloudDbUrl, syncFromCloud]);
 
   // Expose renderAppGridDisplay globally to dynamically load and display the latest products database
   const renderAppGridDisplay = useCallback(async () => {
-    const cloudProducts = await syncFromCloud(cloudDbUrl);
+    const activeUrl = getActiveDatabaseUrl();
+    const cloudProducts = await syncFromCloud(activeUrl);
     if (cloudProducts) return;
 
     // Fallback to local server API
@@ -220,9 +240,10 @@ export default function App() {
       body: JSON.stringify({ products: updatedProducts })
     }).catch(err => console.error('Error syncing products with backup server:', err));
 
-    // 2. Sync with the persistent Zero-Config Cloud Database URL
+    // 2. Sync with the persistent Cloud Database URL
+    const activeUrl = getActiveDatabaseUrl();
     try {
-      const response = await fetch(cloudDbUrl, {
+      const response = await fetch(activeUrl, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json'
@@ -231,7 +252,7 @@ export default function App() {
       });
       if (!response.ok) {
         // If PUT is not supported or fails, try standard POST
-        await fetch(cloudDbUrl, {
+        await fetch(activeUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
@@ -243,6 +264,16 @@ export default function App() {
     } catch (err) {
       console.error('Failed to sync products with cloud database:', err);
     }
+
+    // Show toast and reload to refresh the page display dynamically!
+    setCartToast({
+      message: 'تم حفظ التعديلات ومزامنتها سحابياً بنجاح! جاري تحديث الصفحة...',
+      type: 'success'
+    });
+
+    setTimeout(() => {
+      window.location.reload();
+    }, 1200);
   };
 
   // Admin authentication state
@@ -559,7 +590,7 @@ export default function App() {
     setIsInstaModalOpen(false);
     
     setCartToast({
-      message: "تم حفظ إعدادات المتجر وقاعدة البيانات بنجاح!",
+      message: "تم حفظ إعدادات المتجر وقاعدة البيانات بنجاح! جاري تحديث الصفحة...",
       type: 'success'
     });
     
@@ -571,8 +602,8 @@ export default function App() {
     }
 
     setTimeout(() => {
-      setCartToast(null);
-    }, 3000);
+      window.location.reload();
+    }, 1200);
   };
 
   // Open modal for creating product
@@ -786,6 +817,20 @@ export default function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [lightbox]);
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-brand-bg text-brand-ink flex flex-col items-center justify-center p-6" dir="rtl">
+        <div className="flex flex-col items-center space-y-4 max-w-md text-center">
+          <div className="w-10 h-10 border-3 border-brand-accent/20 border-t-brand-accent rounded-full animate-spin" />
+          <h2 className="font-serif font-semibold text-lg text-brand-ink">جاري تحميل المعرض...</h2>
+          <p className="text-xs text-brand-ink/60 leading-relaxed">
+            نقوم بجلب أحدث التفاصيل، الأسعار، وتوافر المنتجات مباشرة من قاعدة البيانات السحابية لضمان دقة طلبك.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-brand-bg text-brand-ink font-sans selection:bg-brand-accent/20 selection:text-brand-ink transition-colors duration-300">
