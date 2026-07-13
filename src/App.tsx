@@ -140,51 +140,119 @@ export default function App() {
     return null;
   }, []);
 
-  // Fetch the latest database state on mount (Approach B Cloud Sync)
+  // Fetch the latest database state on mount and sync in real-time dynamically (global polling)
   useEffect(() => {
-    async function initSync() {
-      setIsLoading(true);
-      const activeUrl = getActiveDatabaseUrl();
-      console.log('Loading products from cloud database:', activeUrl);
+    let isMounted = true;
+    const activeUrl = getActiveDatabaseUrl();
 
-      // 1. Fetch from main cloud database
-      const cloudProducts = await syncFromCloud(activeUrl);
-      if (cloudProducts) {
-        setIsLoading(false);
-        return;
+    async function initAndSync() {
+      if (isLoading) {
+        console.log('Loading products from cloud database:', activeUrl);
       }
 
-      // 2. Fallback to server-side local Express endpoint
       try {
-        const response = await fetch('/api/products');
+        const response = await fetch(activeUrl);
         if (response.ok) {
-          const serverProducts = await response.json();
-          if (serverProducts && Array.isArray(serverProducts)) {
-            setProducts(serverProducts);
-            localStorage.setItem('hs_handmade_products', JSON.stringify(serverProducts));
-            
-            // Sync current cloud storage with the database if it is empty
-            await fetch(activeUrl, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(serverProducts)
-            }).catch(() => {});
-
-            setIsLoading(false);
-            return;
+          const text = await response.text();
+          if (text && text.trim().startsWith('[')) {
+            const loadedProducts = JSON.parse(text);
+            if (Array.isArray(loadedProducts) && loadedProducts.length > 0) {
+              if (isMounted) {
+                // Strictly update only if different to prevent re-renders, crashes, or layout lag
+                setProducts(prevProducts => {
+                  const prevStr = JSON.stringify(prevProducts);
+                  const nextStr = JSON.stringify(loadedProducts);
+                  if (prevStr !== nextStr) {
+                    localStorage.setItem('hs_handmade_products', nextStr);
+                    return loadedProducts;
+                  }
+                  return prevProducts;
+                });
+                setIsLoading(false);
+                return;
+              }
+            }
           }
         }
-      } catch (err) {
-        console.error('Failed to sync products from backup server:', err);
+      } catch (e) {
+        console.warn('Could not fetch products from Cloud Database:', e);
       }
 
-      // 3. Absolute fallback: get default initial products
-      const defaults = getInitialProducts();
-      setProducts(defaults);
-      setIsLoading(false);
+      // If cloud fetch failed and we are loading for the first time, try fallback
+      if (isLoading) {
+        try {
+          const response = await fetch('/api/products');
+          if (response.ok) {
+            const serverProducts = await response.json();
+            if (serverProducts && Array.isArray(serverProducts)) {
+              if (isMounted) {
+                setProducts(serverProducts);
+                localStorage.setItem('hs_handmade_products', JSON.stringify(serverProducts));
+                
+                // Keep cloud database in sync with fallback if it is empty
+                fetch(activeUrl, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(serverProducts)
+                }).catch(() => {});
+                
+                setIsLoading(false);
+                return;
+              }
+            }
+          }
+        } catch (err) {
+          console.error('Failed to sync products from backup server:', err);
+        }
+
+        // Absolute fallback: load default initial products
+        if (isMounted) {
+          const defaults = getInitialProducts();
+          setProducts(defaults);
+          setIsLoading(false);
+        }
+      }
     }
-    initSync();
-  }, [cloudDbUrl, syncFromCloud]);
+
+    // Call once immediately on load
+    initAndSync();
+
+    // Setup background real-time sync loop every 3 seconds (lightweight, robust, global)
+    const syncInterval = setInterval(() => {
+      async function bgSync() {
+        try {
+          const response = await fetch(activeUrl);
+          if (response.ok) {
+            const text = await response.text();
+            if (text && text.trim().startsWith('[')) {
+              const loadedProducts = JSON.parse(text);
+              if (Array.isArray(loadedProducts) && loadedProducts.length > 0) {
+                if (isMounted) {
+                  setProducts(prevProducts => {
+                    const prevStr = JSON.stringify(prevProducts);
+                    const nextStr = JSON.stringify(loadedProducts);
+                    if (prevStr !== nextStr) {
+                      localStorage.setItem('hs_handmade_products', nextStr);
+                      return loadedProducts;
+                    }
+                    return prevProducts;
+                  });
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // Quiet background network warning to prevent console noise
+        }
+      }
+      bgSync();
+    }, 3000);
+
+    return () => {
+      isMounted = false;
+      clearInterval(syncInterval);
+    };
+  }, [cloudDbUrl]);
 
   // Expose renderAppGridDisplay globally to dynamically load and display the latest products database
   const renderAppGridDisplay = useCallback(async () => {
@@ -312,6 +380,58 @@ export default function App() {
   const [formError, setFormError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState<boolean>(false);
 
+  // Form Autosave local backup auto-save mechanism state
+  const [draftToRestore, setDraftToRestore] = useState<any | null>(null);
+
+  // Track changes to form inputs to auto-save to localStorage
+  useEffect(() => {
+    if (isProductModalOpen) {
+      const hasContent = formTitle.trim() !== '' || formDescription.trim() !== '' || formImages.length > 0 || formPrice !== '';
+      if (hasContent) {
+        const draft = {
+          title: formTitle,
+          category: formCategory,
+          price: formPrice,
+          discountPercentage: formDiscountPercentage,
+          description: formDescription,
+          images: formImages,
+          editingId: editingProduct?.id || null,
+          timestamp: Date.now()
+        };
+        localStorage.setItem('hs_handmade_form_draft', JSON.stringify(draft));
+      }
+    }
+  }, [formTitle, formCategory, formPrice, formDiscountPercentage, formDescription, formImages, editingProduct, isProductModalOpen]);
+
+  // Check for saved draft on opening the modal
+  useEffect(() => {
+    if (isProductModalOpen) {
+      const saved = localStorage.getItem('hs_handmade_form_draft');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          const draftIsEditing = parsed.editingId !== null;
+          const currentIsEditing = editingProduct !== null;
+          
+          // Verify if draft matches current mode (either editing the same product, or both creating a new product)
+          const matchesMode = currentIsEditing 
+            ? (draftIsEditing && parsed.editingId === editingProduct.id)
+            : !draftIsEditing;
+
+          if (matchesMode && (parsed.title || parsed.description || parsed.images?.length > 0 || parsed.price)) {
+            setDraftToRestore(parsed);
+          } else {
+            setDraftToRestore(null);
+          }
+        } catch (e) {
+          console.error('Error parsing draft from localStorage:', e);
+        }
+      }
+    } else {
+      setDraftToRestore(null);
+    }
+  }, [isProductModalOpen, editingProduct]);
+
   // Carousel slider positions per product ID
   const [carouselIndexes, setCarouselIndexes] = useState<Record<string, number>>({});
 
@@ -338,7 +458,7 @@ export default function App() {
   });
   const [instaLinkInput, setInstaLinkInput] = useState(() => {
     const saved = localStorage.getItem('hs_instagram_link');
-    return saved !== null ? saved : 'hs.handmade';
+    return saved !== null ? saved : '';
   });
   const [cloudDbUrlInput, setCloudDbUrlInput] = useState(() => {
     return localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
@@ -568,7 +688,7 @@ export default function App() {
   const openInstaModal = () => {
     if (!isAdmin) return;
     const savedInsta = localStorage.getItem('hs_instagram_link');
-    setInstaLinkInput(savedInsta !== null ? savedInsta : 'hs.handmade');
+    setInstaLinkInput(savedInsta !== null ? savedInsta : '');
     
     const savedDbUrl = localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
     setCloudDbUrlInput(savedDbUrl);
@@ -754,6 +874,7 @@ export default function App() {
     }
 
     saveProducts(updatedProducts);
+    localStorage.removeItem('hs_handmade_form_draft');
 
     setIsProductModalOpen(false);
     setEditingProduct(null);
@@ -1500,7 +1621,6 @@ export default function App() {
                     onChange={(e) => setInstaLinkInput(e.target.value)}
                     className="w-full bg-brand-bg text-brand-ink text-sm px-3.5 py-2.5 rounded-none border border-brand-ink/15 focus:outline-none focus:border-brand-accent text-left font-mono"
                     dir="ltr"
-                    required
                   />
                   <p className="text-[10px] text-brand-ink/50 mt-1 leading-relaxed">
                     سيتم توجيه العملاء إلى هذا الحساب تلقائياً عند إتمام الطلب وإرسال تفاصيل السلة.
@@ -1600,6 +1720,50 @@ export default function App() {
                 <div className="mb-5 p-3.5 bg-red-50 border-l-4 border-red-500 text-red-700 text-xs rounded-none font-semibold flex items-center gap-2">
                   <Info className="w-4 h-4 shrink-0" />
                   <span>{formError}</span>
+                </div>
+              )}
+
+              {draftToRestore && (
+                <div className="mb-5 p-4 bg-brand-bg border border-brand-accent/20 rounded-none text-xs text-brand-ink flex flex-col sm:flex-row items-center justify-between gap-3" dir="rtl">
+                  <div className="flex items-center gap-3 text-right">
+                    <Database className="w-5 h-5 text-brand-accent shrink-0" />
+                    <div>
+                      <span className="font-bold block text-sm">مسودة محفوظة متوفرة (Draft Backup Available)</span>
+                      <span className="text-brand-ink/65 text-[10px]">لديك نسخة محفوظة تلقائياً من تعديلاتك السابقة على هذا المنتج.</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFormTitle(draftToRestore.title || '');
+                        setFormCategory(draftToRestore.category || 'Shawls & Scarves');
+                        setFormPrice(draftToRestore.price || '');
+                        setFormDiscountPercentage(draftToRestore.discountPercentage || '');
+                        setFormDescription(draftToRestore.description || '');
+                        setFormImages(draftToRestore.images || []);
+                        setDraftToRestore(null);
+                        setCartToast({
+                          message: "تمت استعادة المسودة بنجاح!",
+                          type: 'success'
+                        });
+                        setTimeout(() => setCartToast(null), 2500);
+                      }}
+                      className="bg-brand-accent hover:bg-brand-accent/90 text-white px-3 py-1.5 rounded-none font-bold text-[10px] transition-colors cursor-pointer"
+                    >
+                      استعادة (Restore)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        localStorage.removeItem('hs_handmade_form_draft');
+                        setDraftToRestore(null);
+                      }}
+                      className="bg-brand-ink/10 hover:bg-brand-ink/15 text-brand-ink px-2.5 py-1.5 rounded-none text-[10px] transition-colors cursor-pointer"
+                    >
+                      تجاهل (Discard)
+                    </button>
+                  </div>
                 </div>
               )}
 
