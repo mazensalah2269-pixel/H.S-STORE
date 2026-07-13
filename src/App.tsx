@@ -30,7 +30,8 @@ import {
   ExternalLink,
   CheckCircle,
   Instagram,
-  AlertCircle
+  AlertCircle,
+  Download
 } from 'lucide-react';
 import { Product, Category, CartItem } from './types';
 import { getInitialProducts, generateHandmadeSVG } from './utils';
@@ -80,9 +81,24 @@ async function verifySecondPassword(input: string): Promise<boolean> {
   }
 }
 
+/**
+ * Approach A: JSON Configuration & Database Fallback
+ * --------------------------------------------------
+ * MASTER_PRODUCTS_DATA: Feel free to paste your exported JSON database array here.
+ * If populated, this array will be used as the permanent initial products list
+ * across all devices worldwide. To get the JSON array, log in as Admin and click
+ * the "تصدير البيانات" (Export Data) button.
+ */
+const MASTER_PRODUCTS_DATA: Product[] | null = null;
+
 export default function App() {
-  // Load products from localStorage or use defaults
+  // Load products from MASTER_PRODUCTS_DATA, localStorage or defaults
   const [products, setProducts] = useState<Product[]>(() => {
+    // 1. If MASTER_PRODUCTS_DATA is hardcoded, prioritize it as the primary database source!
+    if (MASTER_PRODUCTS_DATA && Array.isArray(MASTER_PRODUCTS_DATA) && MASTER_PRODUCTS_DATA.length > 0) {
+      return MASTER_PRODUCTS_DATA;
+    }
+
     const saved = localStorage.getItem('hs_handmade_products');
     if (saved) {
       try {
@@ -108,8 +124,50 @@ export default function App() {
     localStorage.setItem('hs_handmade_products', JSON.stringify(products));
   }, [products]);
 
+  // Load products from server-side database in real-time on mount (Approach B)
+  useEffect(() => {
+    async function syncFromServer() {
+      try {
+        const response = await fetch('/api/products');
+        if (response.ok) {
+          const serverProducts = await response.json();
+          if (serverProducts && Array.isArray(serverProducts)) {
+            setProducts(serverProducts);
+            localStorage.setItem('hs_handmade_products', JSON.stringify(serverProducts));
+          } else {
+            // First time boot, populate the server with current products
+            await fetch('/api/products', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ products })
+            });
+          }
+        }
+      } catch (err) {
+        console.error('Failed to sync products from server:', err);
+      }
+    }
+    syncFromServer();
+  }, []);
+
   // Expose renderAppGridDisplay globally to dynamically load and display the latest products database
-  const renderAppGridDisplay = useCallback(() => {
+  const renderAppGridDisplay = useCallback(async () => {
+    // 1. Try to fetch from server first (Approach B)
+    try {
+      const response = await fetch('/api/products');
+      if (response.ok) {
+        const serverProducts = await response.json();
+        if (serverProducts && Array.isArray(serverProducts)) {
+          setProducts(serverProducts);
+          localStorage.setItem('hs_handmade_products', JSON.stringify(serverProducts));
+          return;
+        }
+      }
+    } catch (e) {
+      console.warn('Network error loading products from server, falling back to localStorage:', e);
+    }
+
+    // 2. Fallback to localStorage
     const saved = localStorage.getItem('hs_handmade_products');
     if (saved) {
       try {
@@ -127,6 +185,21 @@ export default function App() {
       delete (window as any).renderAppGridDisplay;
     };
   }, [renderAppGridDisplay]);
+
+  // Save products to state, localStorage, and Cloud server-side JSON database (Approach B)
+  const saveProducts = (updatedProducts: Product[]) => {
+    setProducts(updatedProducts);
+    localStorage.setItem('hs_handmade_products', JSON.stringify(updatedProducts));
+    
+    // Save to server-side JSON file for multi-device/visitor syncing
+    fetch('/api/products', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ products: updatedProducts })
+    }).catch(err => console.error('Error syncing products with server database:', err));
+  };
 
   // Admin authentication state
   const [isAdmin, setIsAdmin] = useState<boolean>(() => {
@@ -257,11 +330,34 @@ export default function App() {
     sessionStorage.removeItem('hs_handmade_admin');
   };
 
+  // Export current products list as a JSON file (Approach A)
+  const handleExportData = () => {
+    try {
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(products, null, 2));
+      const downloadAnchor = document.createElement('a');
+      downloadAnchor.setAttribute("href", dataStr);
+      downloadAnchor.setAttribute("download", "products.json");
+      document.body.appendChild(downloadAnchor);
+      downloadAnchor.click();
+      downloadAnchor.remove();
+
+      setCartToast({
+        message: 'تم تصدير ملف products.json بنجاح! يمكنك نسخه ولصقه في متغير MASTER_PRODUCTS_DATA لتثبيت التحديثات بشكل دائم.',
+        type: 'success'
+      });
+    } catch (e) {
+      console.error('Error exporting products data:', e);
+      setCartToast({
+        message: 'فشل تصدير البيانات. يرجى المحاولة لاحقاً.',
+        type: 'error'
+      });
+    }
+  };
+
   // Delete product: instant, immediate, no confirmations!
   const handleDeleteProduct = (productId: string) => {
     const updated = products.filter(p => p.id !== productId);
-    localStorage.setItem('hs_handmade_products', JSON.stringify(updated));
-    setProducts(updated);
+    saveProducts(updated);
     
     // Also clean up state
     setCarouselIndexes(prev => {
@@ -283,8 +379,7 @@ export default function App() {
       }
       return p;
     });
-    localStorage.setItem('hs_handmade_products', JSON.stringify(updated));
-    setProducts(updated);
+    saveProducts(updated);
 
     if (typeof (window as any).renderAppGridDisplay === 'function') {
       (window as any).renderAppGridDisplay();
@@ -587,8 +682,7 @@ export default function App() {
       updatedProducts = [newProduct, ...products];
     }
 
-    localStorage.setItem('hs_handmade_products', JSON.stringify(updatedProducts));
-    setProducts(updatedProducts);
+    saveProducts(updatedProducts);
 
     setIsProductModalOpen(false);
     setEditingProduct(null);
@@ -689,6 +783,14 @@ export default function App() {
                 >
                   <Instagram className="w-3.5 h-3.5" />
                   تعديل رابط الحساب
+                </button>
+                <button 
+                  id="btn-export-products"
+                  onClick={handleExportData}
+                  className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white px-3.5 py-1.5 rounded-xs font-semibold text-xs transition-all duration-150 uppercase tracking-wider cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  تعديل/تصدير البيانات
                 </button>
                 <button 
                   id="btn-admin-logout"

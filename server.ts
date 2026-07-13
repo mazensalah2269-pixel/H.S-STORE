@@ -10,6 +10,37 @@ async function startServer() {
   // Use JSON middleware with large payload limit for base64 uploads
   app.use(express.json({ limit: '20mb' }));
 
+  // API Products Sync Endpoints (Server-side Database)
+  const PRODUCTS_FILE = path.join(process.cwd(), 'products_db.json');
+
+  app.get('/api/products', async (req, res) => {
+    try {
+      if (fs.existsSync(PRODUCTS_FILE)) {
+        const data = await fs.promises.readFile(PRODUCTS_FILE, 'utf-8');
+        return res.json(JSON.parse(data));
+      }
+      return res.json(null); // Return null if no DB file is present yet, so client can upload initial data
+    } catch (error) {
+      console.error('Error reading products DB:', error);
+      res.status(500).json({ error: 'Failed to read products' });
+    }
+  });
+
+  app.post('/api/products', async (req, res) => {
+    try {
+      const { products } = req.body;
+      if (!Array.isArray(products)) {
+        return res.status(400).json({ error: 'Invalid products data structure' });
+      }
+      await fs.promises.writeFile(PRODUCTS_FILE, JSON.stringify(products, null, 2), 'utf-8');
+      console.log('Successfully synchronized products database on the server.');
+      res.json({ success: true });
+    } catch (error) {
+      console.error('Error saving products DB:', error);
+      res.status(500).json({ error: 'Failed to save products' });
+    }
+  });
+
   // API Upload Endpoint
   app.post('/api/upload', async (req, res) => {
     try {
