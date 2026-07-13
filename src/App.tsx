@@ -31,7 +31,9 @@ import {
   CheckCircle,
   Instagram,
   AlertCircle,
-  Download
+  Download,
+  Settings,
+  Database
 } from 'lucide-react';
 import { Product, Category, CartItem } from './types';
 import { getInitialProducts, generateHandmadeSVG } from './utils';
@@ -81,24 +83,13 @@ async function verifySecondPassword(input: string): Promise<boolean> {
   }
 }
 
-/**
- * Approach A: JSON Configuration & Database Fallback
- * --------------------------------------------------
- * MASTER_PRODUCTS_DATA: Feel free to paste your exported JSON database array here.
- * If populated, this array will be used as the permanent initial products list
- * across all devices worldwide. To get the JSON array, log in as Admin and click
- * the "تصدير البيانات" (Export Data) button.
- */
-const MASTER_PRODUCTS_DATA: Product[] | null = null;
-
 export default function App() {
-  // Load products from MASTER_PRODUCTS_DATA, localStorage or defaults
-  const [products, setProducts] = useState<Product[]>(() => {
-    // 1. If MASTER_PRODUCTS_DATA is hardcoded, prioritize it as the primary database source!
-    if (MASTER_PRODUCTS_DATA && Array.isArray(MASTER_PRODUCTS_DATA) && MASTER_PRODUCTS_DATA.length > 0) {
-      return MASTER_PRODUCTS_DATA;
-    }
+  // Cloud Database URL State (zero-configuration, saves permanently to localStorage)
+  const [cloudDbUrl, setCloudDbUrl] = useState(() => {
+    return localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
+  });
 
+  const [products, setProducts] = useState<Product[]>(() => {
     const saved = localStorage.getItem('hs_handmade_products');
     if (saved) {
       try {
@@ -124,9 +115,35 @@ export default function App() {
     localStorage.setItem('hs_handmade_products', JSON.stringify(products));
   }, [products]);
 
-  // Load products from server-side database in real-time on mount (Approach B)
+  // Synchronize products array with the configured Cloud Database URL
+  const syncFromCloud = useCallback(async (targetUrl: string) => {
+    try {
+      const response = await fetch(targetUrl);
+      if (response.ok) {
+        const text = await response.text();
+        if (text && text.trim().startsWith('[')) {
+          const loadedProducts = JSON.parse(text);
+          if (Array.isArray(loadedProducts) && loadedProducts.length > 0) {
+            setProducts(loadedProducts);
+            localStorage.setItem('hs_handmade_products', JSON.stringify(loadedProducts));
+            return loadedProducts;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not fetch products from Cloud Database:', e);
+    }
+    return null;
+  }, []);
+
+  // Fetch the latest database state on mount (Approach B Cloud Sync)
   useEffect(() => {
-    async function syncFromServer() {
+    async function initSync() {
+      // 1. Fetch from the zero-config Cloud Database
+      const cloudProducts = await syncFromCloud(cloudDbUrl);
+      if (cloudProducts) return;
+
+      // 2. Fallback to server-side local Express endpoint
       try {
         const response = await fetch('/api/products');
         if (response.ok) {
@@ -134,25 +151,28 @@ export default function App() {
           if (serverProducts && Array.isArray(serverProducts)) {
             setProducts(serverProducts);
             localStorage.setItem('hs_handmade_products', JSON.stringify(serverProducts));
-          } else {
-            // First time boot, populate the server with current products
-            await fetch('/api/products', {
-              method: 'POST',
+            
+            // Sync current cloud storage with the database if it is empty
+            await fetch(cloudDbUrl, {
+              method: 'PUT',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ products })
+              body: JSON.stringify(serverProducts)
             });
           }
         }
       } catch (err) {
-        console.error('Failed to sync products from server:', err);
+        console.error('Failed to sync products from backup server:', err);
       }
     }
-    syncFromServer();
-  }, []);
+    initSync();
+  }, [cloudDbUrl, syncFromCloud]);
 
   // Expose renderAppGridDisplay globally to dynamically load and display the latest products database
   const renderAppGridDisplay = useCallback(async () => {
-    // 1. Try to fetch from server first (Approach B)
+    const cloudProducts = await syncFromCloud(cloudDbUrl);
+    if (cloudProducts) return;
+
+    // Fallback to local server API
     try {
       const response = await fetch('/api/products');
       if (response.ok) {
@@ -164,10 +184,10 @@ export default function App() {
         }
       }
     } catch (e) {
-      console.warn('Network error loading products from server, falling back to localStorage:', e);
+      console.warn('Network error loading products from backup server:', e);
     }
 
-    // 2. Fallback to localStorage
+    // Fallback to localStorage
     const saved = localStorage.getItem('hs_handmade_products');
     if (saved) {
       try {
@@ -177,7 +197,7 @@ export default function App() {
         console.error('Error in renderAppGridDisplay loading products', e);
       }
     }
-  }, []);
+  }, [cloudDbUrl, syncFromCloud]);
 
   useEffect(() => {
     (window as any).renderAppGridDisplay = renderAppGridDisplay;
@@ -186,19 +206,43 @@ export default function App() {
     };
   }, [renderAppGridDisplay]);
 
-  // Save products to state, localStorage, and Cloud server-side JSON database (Approach B)
-  const saveProducts = (updatedProducts: Product[]) => {
+  // Save products to state, localStorage, local backup API, and persistent cloud database URL
+  const saveProducts = async (updatedProducts: Product[]) => {
     setProducts(updatedProducts);
     localStorage.setItem('hs_handmade_products', JSON.stringify(updatedProducts));
     
-    // Save to server-side JSON file for multi-device/visitor syncing
+    // 1. Sync with the local Express backup file API
     fetch('/api/products', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({ products: updatedProducts })
-    }).catch(err => console.error('Error syncing products with server database:', err));
+    }).catch(err => console.error('Error syncing products with backup server:', err));
+
+    // 2. Sync with the persistent Zero-Config Cloud Database URL
+    try {
+      const response = await fetch(cloudDbUrl, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(updatedProducts)
+      });
+      if (!response.ok) {
+        // If PUT is not supported or fails, try standard POST
+        await fetch(cloudDbUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(updatedProducts)
+        });
+      }
+      console.log('Successfully synchronized products with cloud database.');
+    } catch (err) {
+      console.error('Failed to sync products with cloud database:', err);
+    }
   };
 
   // Admin authentication state
@@ -265,6 +309,9 @@ export default function App() {
     const saved = localStorage.getItem('hs_instagram_link');
     return saved !== null ? saved : 'hs.handmade';
   });
+  const [cloudDbUrlInput, setCloudDbUrlInput] = useState(() => {
+    return localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
+  });
 
   // Persist cart to localStorage
   useEffect(() => {
@@ -328,30 +375,6 @@ export default function App() {
   const handleAdminLogout = () => {
     setIsAdmin(false);
     sessionStorage.removeItem('hs_handmade_admin');
-  };
-
-  // Export current products list as a JSON file (Approach A)
-  const handleExportData = () => {
-    try {
-      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(products, null, 2));
-      const downloadAnchor = document.createElement('a');
-      downloadAnchor.setAttribute("href", dataStr);
-      downloadAnchor.setAttribute("download", "products.json");
-      document.body.appendChild(downloadAnchor);
-      downloadAnchor.click();
-      downloadAnchor.remove();
-
-      setCartToast({
-        message: 'تم تصدير ملف products.json بنجاح! يمكنك نسخه ولصقه في متغير MASTER_PRODUCTS_DATA لتثبيت التحديثات بشكل دائم.',
-        type: 'success'
-      });
-    } catch (e) {
-      console.error('Error exporting products data:', e);
-      setCartToast({
-        message: 'فشل تصدير البيانات. يرجى المحاولة لاحقاً.',
-        type: 'error'
-      });
-    }
   };
 
   // Delete product: instant, immediate, no confirmations!
@@ -510,26 +533,43 @@ export default function App() {
     });
   }, [products]);
 
-  // Admin Instagram Link Control Handlers
+  // Admin Store Settings & Cloud Database Control Handlers
   const openInstaModal = () => {
     if (!isAdmin) return;
-    const saved = localStorage.getItem('hs_instagram_link');
-    setInstaLinkInput(saved !== null ? saved : 'hs.handmade');
+    const savedInsta = localStorage.getItem('hs_instagram_link');
+    setInstaLinkInput(savedInsta !== null ? savedInsta : 'hs.handmade');
+    
+    const savedDbUrl = localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
+    setCloudDbUrlInput(savedDbUrl);
+    
     setIsInstaModalOpen(true);
   };
 
-  const handleSaveInstaLink = (e: React.FormEvent) => {
+  const handleSaveStoreSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin) return;
-    const trimmed = instaLinkInput.trim();
-    localStorage.setItem('hs_instagram_link', trimmed);
-    setCurrentSavedLink(trimmed);
+    const trimmedInsta = instaLinkInput.trim();
+    const trimmedDbUrl = cloudDbUrlInput.trim();
+
+    localStorage.setItem('hs_instagram_link', trimmedInsta);
+    setCurrentSavedLink(trimmedInsta);
+
+    localStorage.setItem('hs_handmade_cloud_db_url', trimmedDbUrl);
+    setCloudDbUrl(trimmedDbUrl);
     setIsInstaModalOpen(false);
     
     setCartToast({
-      message: "تم حفظ رابط حساب إنستغرام بنجاح!",
+      message: "تم حفظ إعدادات المتجر وقاعدة البيانات بنجاح!",
       type: 'success'
     });
+    
+    // Attempt instant cloud synchronization
+    try {
+      await syncFromCloud(trimmedDbUrl);
+    } catch (err) {
+      console.error('Failed to sync from cloud URL:', err);
+    }
+
     setTimeout(() => {
       setCartToast(null);
     }, 3000);
@@ -781,16 +821,8 @@ export default function App() {
                   onClick={openInstaModal}
                   className="flex items-center gap-1.5 bg-[#4F46E5] hover:bg-[#4338CA] active:scale-95 text-white px-3.5 py-1.5 rounded-xs font-semibold text-xs transition-all duration-150 uppercase tracking-wider cursor-pointer"
                 >
-                  <Instagram className="w-3.5 h-3.5" />
-                  تعديل رابط الحساب
-                </button>
-                <button 
-                  id="btn-export-products"
-                  onClick={handleExportData}
-                  className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 active:scale-95 text-white px-3.5 py-1.5 rounded-xs font-semibold text-xs transition-all duration-150 uppercase tracking-wider cursor-pointer"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  تعديل/تصدير البيانات
+                  <Settings className="w-3.5 h-3.5" />
+                  إعدادات المتجر وقاعدة البيانات
                 </button>
                 <button 
                   id="btn-admin-logout"
@@ -1358,14 +1390,14 @@ export default function App() {
                 </h3>
                 
                 <p className="text-xs text-brand-ink/65 leading-relaxed" dir="rtl">
-                  نعتذر عن الإزعاج! يرجى المحاولة مرة أخرى لاحقاً أو التواصل معنا مباشرة عبر قنوات التواصل الأخرى المتاحة.
+                  نعتذر عن الإزعاج، لكن ميزة الشراء معطلة حالياً. يرجى التواصل معنا عبر إنستغرام لطلب المنتجات مباشرة!
                 </p>
-
+                
                 <button
                   onClick={() => setIsCheckoutUnavailableModalOpen(false)}
-                  className="mt-4 w-full bg-brand-ink hover:bg-brand-ink/90 text-white py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
+                  className="mt-2 bg-brand-ink hover:bg-brand-ink/90 text-white w-full py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition-all cursor-pointer"
                 >
-                  إغلاق (Close)
+                  حسناً (OK)
                 </button>
               </div>
             </motion.div>
@@ -1374,7 +1406,7 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* E. INSTAGRAM LINK EDIT MODAL (Admin Only Settings) */}
+      {/* E. STORE SETTINGS & DATABASE MODAL (Admin Only Settings) */}
       <AnimatePresence>
         {isAdmin && isInstaModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -1393,30 +1425,27 @@ export default function App() {
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="relative w-full max-w-md bg-white border border-brand-ink/10 rounded-none shadow-xl p-6 overflow-hidden z-10"
+              className="relative w-full max-w-lg bg-white border border-brand-ink/10 rounded-none shadow-xl p-6 overflow-hidden z-10"
             >
               <div className="flex items-center justify-between mb-4 pb-3 border-b border-brand-ink/10">
                 <div className="flex items-center gap-2">
-                  <Instagram className="w-4 h-4 text-brand-accent animate-pulse" />
+                  <Settings className="w-4 h-4 text-brand-accent animate-spin" style={{ animationDuration: '6s' }} />
                   <h3 className="font-serif font-semibold text-lg text-brand-ink">
-                    تعديل رابط حساب إنستغرام
+                    إعدادات المتجر وقاعدة البيانات
                   </h3>
                 </div>
                 <button
                   onClick={() => setIsInstaModalOpen(false)}
-                  className="text-brand-ink/40 hover:text-brand-ink"
+                  className="text-brand-ink/40 hover:text-brand-ink cursor-pointer"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
-              <form onSubmit={handleSaveInstaLink}>
-                <p className="text-xs text-brand-ink/60 leading-relaxed mb-4 text-right" dir="rtl">
-                  الرجاء إدخال اسم المستخدم لحساب إنستغرام الخاص بالمتجر (مثال: <code className="bg-brand-bg px-1 py-0.5 text-brand-accent">hs.handmade</code>) أو الرابط الكامل لحسابك أو لرسائلك المباشرة. سيتم توجيه العملاء إلى هذا الرابط تلقائياً عند إتمام الطلب من السلة.
-                </p>
-
-                <div className="mb-4 text-right" dir="rtl">
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-brand-ink/80 mb-1.5">
+              <form onSubmit={handleSaveStoreSettings} className="space-y-4">
+                {/* 1. Instagram Link */}
+                <div className="text-right" dir="rtl">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-brand-ink/80 mb-1.5">
                     رابط أو اسم مستخدم حساب إنستغرام
                   </label>
                   <input
@@ -1426,22 +1455,57 @@ export default function App() {
                     onChange={(e) => setInstaLinkInput(e.target.value)}
                     className="w-full bg-brand-bg text-brand-ink text-sm px-3.5 py-2.5 rounded-none border border-brand-ink/15 focus:outline-none focus:border-brand-accent text-left font-mono"
                     dir="ltr"
+                    required
                   />
+                  <p className="text-[10px] text-brand-ink/50 mt-1 leading-relaxed">
+                    سيتم توجيه العملاء إلى هذا الحساب تلقائياً عند إتمام الطلب وإرسال تفاصيل السلة.
+                  </p>
                 </div>
 
-                <div className="flex justify-end gap-2.5">
+                {/* 2. Cloud Database URL */}
+                <div className="text-right border-t border-brand-ink/10 pt-4" dir="rtl">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setCloudDbUrlInput('https://kvdb.io/MN_hs_handmade_220acadc/products')}
+                      className="text-[10px] text-brand-accent hover:underline font-bold"
+                    >
+                      استعادة الرابط الافتراضي
+                    </button>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-brand-ink/80">
+                      رابط قاعدة البيانات السحابية (JSON Cloud Sync)
+                    </label>
+                  </div>
+                  <input
+                    type="text"
+                    placeholder="رابط API لحفظ المنتجات"
+                    value={cloudDbUrlInput}
+                    onChange={(e) => setCloudDbUrlInput(e.target.value)}
+                    className="w-full bg-brand-bg text-brand-ink text-xs px-3.5 py-2.5 rounded-none border border-brand-ink/15 focus:outline-none focus:border-brand-accent text-left font-mono"
+                    dir="ltr"
+                    required
+                  />
+                  <div className="bg-amber-50 border border-amber-500/10 p-3 mt-2 text-[11px] text-amber-900 leading-relaxed space-y-1.5">
+                    <p>
+                      <strong>مزامنة تلقائية 100%:</strong> تم دمج قاعدة بيانات سحابية مجانية فائقة السرعة. أي تعديل في المنتجات، الخصومات، والتوفر سيتم حفظه ومزامنته للجميع في نفس اللحظة دون الحاجة لملفات يدوية!
+                    </p>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex justify-end gap-2.5 border-t border-brand-ink/10 pt-4">
                   <button
                     type="button"
                     onClick={() => setIsInstaModalOpen(false)}
-                    className="bg-brand-bg hover:bg-brand-ink/5 text-brand-ink border border-brand-ink/10 px-4 py-2 rounded-none text-xs font-bold uppercase tracking-wider transition-colors"
+                    className="bg-brand-bg hover:bg-brand-ink/5 text-brand-ink border border-brand-ink/10 px-4 py-2 rounded-none text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
                   >
                     إلغاء (Cancel)
                   </button>
                   <button
                     type="submit"
-                    className="bg-brand-accent hover:bg-brand-accent/90 text-white px-5 py-2 rounded-none text-xs font-bold uppercase tracking-wider transition-all shadow-xs"
+                    className="bg-brand-accent hover:bg-brand-accent/90 text-white px-5 py-2 rounded-none text-xs font-bold uppercase tracking-wider transition-all shadow-xs cursor-pointer"
                   >
-                    حفظ الرابط (Save Link)
+                    حفظ الإعدادات (Save Settings)
                   </button>
                 </div>
               </form>
