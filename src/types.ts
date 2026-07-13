@@ -8,4 +8,12 @@ export interface Product {
   description: string;
   images: string[]; // Base64 data URLs or inline SVG strings
   createdAt: string;
+  status?: 'instock' | 'outofstock';
+  discountPercentage?: number;
+}
+
+export interface CartItem {
+  id: string; // matches product.id
+  product: Product;
+  quantity: number;
 }
