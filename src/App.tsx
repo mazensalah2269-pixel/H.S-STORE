@@ -34,7 +34,6 @@ import {
   Download,
   Settings,
   Database,
-  Facebook,
   MessageCircle
 } from 'lucide-react';
 import { Product, Category, CartItem } from './types';
@@ -132,30 +131,16 @@ export default function App() {
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
-  // Instagram, WhatsApp, Facebook and Settings State declarations
+  // Instagram and Settings State declarations
   const [isInstaModalOpen, setIsInstaModalOpen] = useState(false);
   const [isCheckoutUnavailableModalOpen, setIsCheckoutUnavailableModalOpen] = useState(false);
   
   const [currentSavedLink, setCurrentSavedLink] = useState<string | null>(() => {
     return localStorage.getItem('hs_instagram_link');
   });
-  const [socialWhatsApp, setSocialWhatsApp] = useState<string | null>(() => {
-    return localStorage.getItem('hs_whatsapp_link');
-  });
-  const [socialFacebook, setSocialFacebook] = useState<string | null>(() => {
-    return localStorage.getItem('hs_facebook_link');
-  });
 
   const [instaLinkInput, setInstaLinkInput] = useState(() => {
     const saved = localStorage.getItem('hs_instagram_link');
-    return saved !== null ? saved : '';
-  });
-  const [whatsappLinkInput, setWhatsappLinkInput] = useState(() => {
-    const saved = localStorage.getItem('hs_whatsapp_link');
-    return saved !== null ? saved : '';
-  });
-  const [facebookLinkInput, setFacebookLinkInput] = useState(() => {
-    const saved = localStorage.getItem('hs_facebook_link');
     return saved !== null ? saved : '';
   });
   const [cloudDbUrlInput, setCloudDbUrlInput] = useState(() => {
@@ -206,20 +191,6 @@ export default function App() {
                 setCurrentSavedLink(loadedSettings.instagram);
               }
             }
-            if (loadedSettings.whatsapp !== undefined) {
-              const prev = localStorage.getItem('hs_whatsapp_link');
-              if (prev !== loadedSettings.whatsapp) {
-                localStorage.setItem('hs_whatsapp_link', loadedSettings.whatsapp);
-                setSocialWhatsApp(loadedSettings.whatsapp);
-              }
-            }
-            if (loadedSettings.facebook !== undefined) {
-              const prev = localStorage.getItem('hs_facebook_link');
-              if (prev !== loadedSettings.facebook) {
-                localStorage.setItem('hs_facebook_link', loadedSettings.facebook);
-                setSocialFacebook(loadedSettings.facebook);
-              }
-            }
             return loadedSettings;
           }
         }
@@ -236,83 +207,92 @@ export default function App() {
     const activeUrl = getActiveDatabaseUrl();
 
     async function initAndSync() {
-      if (isLoading) {
-        console.log('Loading products from cloud database:', activeUrl);
+      if (isMounted) {
+        setIsLoading(true);
       }
 
-      // Sync settings first (Rule 4)
+      // 1. Sync settings first
       await syncSettingsFromCloud(activeUrl);
 
+      let success = false;
+
+      // 2. Try fetching from the cloud database URL (kvdb.io)
       try {
         const response = await fetch(activeUrl);
         if (response.ok) {
           const text = await response.text();
           if (text && text.trim().startsWith('[')) {
             const loadedProducts = JSON.parse(text);
-            if (Array.isArray(loadedProducts) && loadedProducts.length > 0) {
+            if (Array.isArray(loadedProducts)) {
               if (isMounted) {
-                // Strictly update only if different to prevent re-renders, crashes, or layout lag
-                setProducts(prevProducts => {
-                  const prevStr = JSON.stringify(prevProducts);
-                  const nextStr = JSON.stringify(loadedProducts);
-                  if (prevStr !== nextStr) {
-                    localStorage.setItem('hs_handmade_products', nextStr);
-                    return loadedProducts;
-                  }
-                  return prevProducts;
-                });
+                setProducts(loadedProducts);
+                localStorage.setItem('hs_handmade_products', JSON.stringify(loadedProducts));
                 setIsLoading(false);
-                return;
+                success = true;
               }
             }
           }
         }
       } catch (e) {
-        console.warn('Could not fetch products from Cloud Database:', e);
+        console.warn('Could not fetch products from Cloud Database on mount:', e);
       }
 
-      // If cloud fetch failed and we are loading for the first time, try fallback
-      if (isLoading) {
-        try {
-          const response = await fetch('/api/products');
-          if (response.ok) {
-            const serverProducts = await response.json();
-            if (serverProducts && Array.isArray(serverProducts)) {
-              if (isMounted) {
-                setProducts(serverProducts);
-                localStorage.setItem('hs_handmade_products', JSON.stringify(serverProducts));
-                
-                // Keep cloud database in sync with fallback if it is empty
-                fetch(activeUrl, {
-                  method: 'PUT',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify(serverProducts)
-                }).catch(() => {});
-                
-                setIsLoading(false);
-                return;
-              }
+      if (success) return;
+
+      // 3. Try fallback to local express backup server
+      try {
+        const response = await fetch('/api/products');
+        if (response.ok) {
+          const serverProducts = await response.json();
+          if (serverProducts && Array.isArray(serverProducts)) {
+            if (isMounted) {
+              setProducts(serverProducts);
+              localStorage.setItem('hs_handmade_products', JSON.stringify(serverProducts));
+              setIsLoading(false);
+              success = true;
             }
           }
-        } catch (err) {
-          console.error('Failed to sync products from backup server:', err);
         }
+      } catch (err) {
+        console.error('Failed to sync products from backup server:', err);
+      }
 
-        // Absolute fallback: load default initial products
-        if (isMounted) {
-          const defaults = getInitialProducts();
-          setProducts(defaults);
-          setIsLoading(false);
+      if (success) return;
+
+      // 4. Try fallback to localStorage cached products
+      const cached = localStorage.getItem('hs_handmade_products');
+      if (cached) {
+        try {
+          const loadedProducts = JSON.parse(cached);
+          if (Array.isArray(loadedProducts)) {
+            if (isMounted) {
+              setProducts(loadedProducts);
+              setIsLoading(false);
+              success = true;
+            }
+          }
+        } catch (e) {
+          console.error('Failed to parse cached products:', e);
         }
+      }
+
+      if (success) return;
+
+      // 5. Absolute fallback: load default initial products
+      if (isMounted) {
+        const defaults = getInitialProducts();
+        setProducts(defaults);
+        localStorage.setItem('hs_handmade_products', JSON.stringify(defaults));
+        setIsLoading(false);
       }
     }
 
     // Call once immediately on load
     initAndSync();
 
-    // Setup background real-time sync loop every 8 seconds (lightweight, robust, global) (Rule 3)
+    // Setup background real-time sync loop every 5 seconds (snappy and lightweight)
     const syncInterval = setInterval(() => {
-      // Opt-out / Pause background requests if the tab is hidden, or if admin is actively editing/setting up (Rule 1)
+      // Opt-out / Pause background requests if the tab is hidden, or if admin is actively editing/setting up
       if (document.hidden || isProductModalOpen || isInstaModalOpen) {
         return;
       }
@@ -329,7 +309,7 @@ export default function App() {
             const text = await response.text();
             if (text && text.trim().startsWith('[')) {
               const loadedProducts = JSON.parse(text);
-              if (Array.isArray(loadedProducts) && loadedProducts.length > 0) {
+              if (Array.isArray(loadedProducts)) {
                 if (isMounted) {
                   setProducts(prevProducts => {
                     const prevStr = JSON.stringify(prevProducts);
@@ -345,11 +325,11 @@ export default function App() {
             }
           }
         } catch (e) {
-          // Quiet background network warning to prevent console noise
+          // Quiet background network warning
         }
       }
       bgSync();
-    }, 8000);
+    }, 5000);
 
     return () => {
       isMounted = false;
@@ -645,6 +625,10 @@ export default function App() {
 
   // Cart operations
   const handleAddToCart = (product: Product) => {
+    if (!currentSavedLink || currentSavedLink.trim() === '') {
+      setIsCheckoutUnavailableModalOpen(true);
+      return;
+    }
     setCart(prev => {
       const existing = prev.find(item => item.id === product.id);
       if (existing) {
@@ -771,12 +755,8 @@ export default function App() {
   const openInstaModal = () => {
     if (!isAdmin) return;
     const savedInsta = localStorage.getItem('hs_instagram_link') || '';
-    const savedWhatsApp = localStorage.getItem('hs_whatsapp_link') || '';
-    const savedFacebook = localStorage.getItem('hs_facebook_link') || '';
     
     setInstaLinkInput(savedInsta);
-    setWhatsappLinkInput(savedWhatsApp);
-    setFacebookLinkInput(savedFacebook);
     
     const savedDbUrl = localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
     setCloudDbUrlInput(savedDbUrl);
@@ -792,21 +772,15 @@ export default function App() {
     setSaveSuccessSettings(false);
 
     const trimmedInsta = instaLinkInput.trim();
-    const trimmedWhatsApp = whatsappLinkInput.trim();
-    const trimmedFacebook = facebookLinkInput.trim();
     const trimmedDbUrl = cloudDbUrlInput.trim();
 
     // 1. Save to localStorage
     localStorage.setItem('hs_instagram_link', trimmedInsta);
-    localStorage.setItem('hs_whatsapp_link', trimmedWhatsApp);
-    localStorage.setItem('hs_facebook_link', trimmedFacebook);
     localStorage.setItem('hs_handmade_cloud_db_url', trimmedDbUrl);
 
     // 2. Build settings package (Rule 2)
     const settingsData = {
-      instagram: trimmedInsta,
-      whatsapp: trimmedWhatsApp,
-      facebook: trimmedFacebook
+      instagram: trimmedInsta
     };
 
     const settingsUrl = getSettingsUrl(trimmedDbUrl);
@@ -831,8 +805,6 @@ export default function App() {
 
     // 4. Update in-memory states
     setCurrentSavedLink(trimmedInsta);
-    setSocialWhatsApp(trimmedWhatsApp);
-    setSocialFacebook(trimmedFacebook);
     setCloudDbUrl(trimmedDbUrl);
 
     setIsSavingSettings(false);
@@ -1342,11 +1314,17 @@ export default function App() {
                       src={currentImg}
                       alt={product.title}
                       referrerPolicy="no-referrer"
-                      onClick={() => setLightbox({
-                        images: product.images,
-                        index: currentImgIdx,
-                        title: product.title
-                      })}
+                      onClick={() => {
+                        if (!currentSavedLink || currentSavedLink.trim() === '') {
+                          setIsCheckoutUnavailableModalOpen(true);
+                          return;
+                        }
+                        setLightbox({
+                          images: product.images,
+                          index: currentImgIdx,
+                          title: product.title
+                        });
+                      }}
                       className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-[1.02] cursor-zoom-in"
                     />
 
@@ -1593,28 +1571,6 @@ export default function App() {
                   <Instagram className="w-4 h-4" />
                 </a>
               )}
-              {socialWhatsApp && socialWhatsApp.trim() !== '' && (
-                <a
-                  href={`https://wa.me/${socialWhatsApp.trim().replace(/[^0-9]/g, '')}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/15 hover:text-white flex items-center justify-center transition-all text-white/70 border border-white/5"
-                  title="WhatsApp"
-                >
-                  <MessageCircle className="w-4 h-4" />
-                </a>
-              )}
-              {socialFacebook && socialFacebook.trim() !== '' && (
-                <a
-                  href={socialFacebook.startsWith('http') ? socialFacebook.trim() : `https://facebook.com/${socialFacebook.trim()}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/15 hover:text-white flex items-center justify-center transition-all text-white/70 border border-white/5"
-                  title="Facebook"
-                >
-                  <Facebook className="w-4 h-4" />
-                </a>
-              )}
             </div>
             <span className="text-white/40 text-[11px]">© 2026 H.S HandMade Workshop. All rights reserved.</span>
           </div>
@@ -1735,11 +1691,15 @@ export default function App() {
                 </div>
                 
                 <h3 className="font-sans font-bold text-base text-brand-ink mt-2">
-                  عفواً، إتمام الطلب غير متاح في الوقت الحالي.
+                  عفواً، رابط حساب إنستغرام مطلوب!
                 </h3>
                 
                 <p className="text-xs text-brand-ink/65 leading-relaxed" dir="rtl">
-                  نعتذر عن الإزعاج، لكن ميزة الشراء معطلة حالياً. يرجى التواصل معنا عبر إنستغرام لطلب المنتجات مباشرة!
+                  {isAdmin ? (
+                    "بصفتك مديراً، يرجى الدخول إلى إعدادات المتجر وتعيين رابط أو اسم مستخدم حساب إنستغرام لتفعيل إمكانية تصفح تفاصيل المنتجات وتلقي الطلبات بنجاح."
+                  ) : (
+                    "نعتذر عن الإزعاج، الطلب وعرض تفاصيل المنتجات معطل حالياً لعدم ربط حساب إنستغرام بالمتجر. يرجى من مدير الموقع ضبط الإعدادات أولاً."
+                  )}
                 </p>
                 
                 <button
@@ -1808,44 +1768,6 @@ export default function App() {
                   />
                   <p className="text-[10px] text-brand-ink/50 mt-1 leading-relaxed">
                     سيتم توجيه العملاء إلى هذا الحساب تلقائياً عند إتمام الطلب وإرسال تفاصيل السلة.
-                  </p>
-                </div>
-
-                {/* 2. WhatsApp Number */}
-                <div className="text-right border-t border-brand-ink/10 pt-4" dir="rtl">
-                  <label className="block text-xs font-bold uppercase tracking-wider text-brand-ink/80 mb-1.5 flex items-center justify-end gap-1.5">
-                    <MessageCircle className="w-3.5 h-3.5 text-emerald-500" />
-                    <span>رقم واتساب للمتجر (اختياري)</span>
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="مثال: +966500000000"
-                    value={whatsappLinkInput}
-                    onChange={(e) => setWhatsappLinkInput(e.target.value)}
-                    className="w-full bg-brand-bg text-brand-ink text-sm px-3.5 py-2.5 rounded-none border border-brand-ink/15 focus:outline-none focus:border-brand-accent text-left font-mono"
-                    dir="ltr"
-                  />
-                  <p className="text-[10px] text-brand-ink/50 mt-1 leading-relaxed">
-                    رقم الواتساب الخاص بالمتجر للتواصل المباشر مع العملاء.
-                  </p>
-                </div>
-
-                {/* 3. Facebook Page Link */}
-                <div className="text-right border-t border-brand-ink/10 pt-4" dir="rtl">
-                  <label className="block text-xs font-bold uppercase tracking-wider text-brand-ink/80 mb-1.5 flex items-center justify-end gap-1.5">
-                    <Facebook className="w-3.5 h-3.5 text-blue-600" />
-                    <span>رابط صفحة فيسبوك للمتجر (اختياري)</span>
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="مثال: hs.handmade"
-                    value={facebookLinkInput}
-                    onChange={(e) => setFacebookLinkInput(e.target.value)}
-                    className="w-full bg-brand-bg text-brand-ink text-sm px-3.5 py-2.5 rounded-none border border-brand-ink/15 focus:outline-none focus:border-brand-accent text-left font-mono"
-                    dir="ltr"
-                  />
-                  <p className="text-[10px] text-brand-ink/50 mt-1 leading-relaxed">
-                    رابط أو اسم مستخدم صفحة فيسبوك لعرض متجرك على منصة فيسبوك.
                   </p>
                 </div>
 
