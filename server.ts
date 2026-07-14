@@ -41,6 +41,75 @@ async function startServer() {
     }
   });
 
+  // Server-side proxies for kvdb.io to prevent CORS and browser connection blocks (Failed to fetch)
+  app.get('/api/kvdb/products', async (req, res) => {
+    try {
+      const response = await fetch('https://kvdb.io/MN_hs_handmade_220acadc/products');
+      if (response.status === 404) {
+        return res.status(404).json({ error: 'Not Found' });
+      }
+      if (!response.ok) {
+        return res.status(response.status).json({ error: `kvdb error: ${response.statusText}` });
+      }
+      const data = await response.json();
+      return res.json(data);
+    } catch (error: any) {
+      console.error('Proxy GET products error:', error);
+      res.status(500).json({ error: error.message || 'Failed to fetch cloud products' });
+    }
+  });
+
+  app.put('/api/kvdb/products', async (req, res) => {
+    try {
+      const response = await fetch('https://kvdb.io/MN_hs_handmade_220acadc/products', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req.body)
+      });
+      if (!response.ok) {
+        return res.status(response.status).json({ error: `kvdb error: ${response.statusText}` });
+      }
+      return res.json({ success: true });
+    } catch (error: any) {
+      console.error('Proxy PUT products error:', error);
+      res.status(500).json({ error: error.message || 'Failed to save cloud products' });
+    }
+  });
+
+  app.get('/api/kvdb/settings', async (req, res) => {
+    try {
+      const response = await fetch('https://kvdb.io/MN_hs_handmade_220acadc/settings');
+      if (response.status === 404) {
+        return res.status(404).json({ error: 'Not Found' });
+      }
+      if (!response.ok) {
+        return res.status(response.status).json({ error: `kvdb error: ${response.statusText}` });
+      }
+      const data = await response.json();
+      return res.json(data);
+    } catch (error: any) {
+      console.error('Proxy GET settings error:', error);
+      res.status(500).json({ error: error.message || 'Failed to fetch cloud settings' });
+    }
+  });
+
+  app.put('/api/kvdb/settings', async (req, res) => {
+    try {
+      const response = await fetch('https://kvdb.io/MN_hs_handmade_220acadc/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req.body)
+      });
+      if (!response.ok) {
+        return res.status(response.status).json({ error: `kvdb error: ${response.statusText}` });
+      }
+      return res.json({ success: true });
+    } catch (error: any) {
+      console.error('Proxy PUT settings error:', error);
+      res.status(500).json({ error: error.message || 'Failed to save cloud settings' });
+    }
+  });
+
   // API Upload Endpoint
   app.post('/api/upload', async (req, res) => {
     try {

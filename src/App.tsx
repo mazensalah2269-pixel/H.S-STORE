@@ -100,28 +100,20 @@ async function verifySecondPassword(input: string): Promise<boolean> {
  *    be synced globally for all customers in real-time instantly.
  * ---------------------------------------------------------------------------------
  */
-const CLOUD_DATABASE_URL: string = "YOUR_DATABASE_URL_HERE";
+const CLOUD_DATABASE_URL: string = "/api/kvdb/products";
 
 // Determine the active database URL
 const getActiveDatabaseUrl = () => {
-  if (CLOUD_DATABASE_URL && CLOUD_DATABASE_URL !== "YOUR_DATABASE_URL_HERE" && CLOUD_DATABASE_URL.trim() !== "") {
-    return CLOUD_DATABASE_URL.trim();
-  }
-  return localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
+  return "/api/kvdb/products";
 };
 
 const getSettingsUrl = (dbUrl: string) => {
-  if (dbUrl.includes('/products')) {
-    return dbUrl.replace('/products', '/settings');
-  }
-  return dbUrl + '_settings';
+  return "/api/kvdb/settings";
 };
 
 export default function App() {
-  // Cloud Database URL State (zero-configuration, saves permanently to localStorage)
-  const [cloudDbUrl, setCloudDbUrl] = useState(() => {
-    return localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
-  });
+  // Cloud Database URL State
+  const [cloudDbUrl, setCloudDbUrl] = useState("/api/kvdb/products");
 
   const [products, setProducts] = useState<Product[]>(() => {
     const cached = localStorage.getItem('hs_handmade_products');
@@ -157,9 +149,7 @@ export default function App() {
     const saved = localStorage.getItem('hs_instagram_link');
     return saved !== null ? saved : '';
   });
-  const [cloudDbUrlInput, setCloudDbUrlInput] = useState(() => {
-    return localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
-  });
+  const [cloudDbUrlInput, setCloudDbUrlInput] = useState("/api/kvdb/products");
 
   // Trackable saving operations for visual loader spinners (Rule 2)
   const [isSavingSettings, setIsSavingSettings] = useState(false);
@@ -335,7 +325,7 @@ export default function App() {
     // Call once immediately on load
     initAndSync();
 
-    // Setup background real-time sync loop every 5 seconds (strict 5-second interval for customers/viewers - Rule 4)
+    // Setup background real-time sync loop every 4 seconds (strict 4-second interval for customers/viewers - Rule 3)
     const syncInterval = setInterval(() => {
       // Opt-out / Pause background requests if the tab is hidden, or if admin is actively editing/setting up
       if (document.hidden || isProductModalOpen || isInstaModalOpen) {
@@ -378,13 +368,13 @@ export default function App() {
         }
       }
       bgSync();
-    }, 5000);
+    }, 4000);
 
     return () => {
       isMounted = false;
       clearInterval(syncInterval);
     };
-  }, [cloudDbUrl, isProductModalOpen, isInstaModalOpen, syncSettingsFromCloud]);
+  }, [isProductModalOpen, isInstaModalOpen, syncSettingsFromCloud]);
 
   // Expose renderAppGridDisplay globally to dynamically load and display the latest products database
   const renderAppGridDisplay = useCallback(async () => {
@@ -428,52 +418,36 @@ export default function App() {
 
   // Save products to state, localStorage, local backup API, and persistent cloud database URL
   const saveProducts = async (updatedProducts: Product[]) => {
-    // Instantly update state and localStorage backup (Rule 1a)
+    // FIRST, instantly save the new data to the browser's localStorage (as an instant local backup)
     setProducts(updatedProducts);
     localStorage.setItem('hs_handmade_products', JSON.stringify(updatedProducts));
     
-    // 1. Sync with the local Express backup file API in background
+    // Sync with local backup API silently in background if needed
     fetch('/api/products', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ products: updatedProducts })
-    }).catch(err => console.error('Error syncing products with backup server:', err));
+    }).catch(() => {});
 
-    // 2. Sync with the persistent Cloud Database URL (Rule 1b)
-    const activeUrl = getActiveDatabaseUrl();
+    // SECOND, send the updated data to kvdb.io via a clean HTTP PUT request
+    const activeUrl = "/api/kvdb/products";
     try {
       const response = await fetch(activeUrl, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedProducts)
       });
       if (!response.ok) {
-        // If PUT is not supported or fails, try standard POST
-        const fallbackResponse = await fetch(activeUrl, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(updatedProducts)
-        });
-        if (!fallbackResponse.ok) {
-          throw new Error(`استجابة خادم السحابة غير ناجحة (كود ${fallbackResponse.status})`);
-        }
+        throw new Error(`استجابة خادم السحابة غير ناجحة (كود ${response.status})`);
       }
       console.log('Successfully synchronized products with cloud database.');
       
-      // Show non-blocking success toast instantly
       setCartToast({
         message: 'تم حفظ التعديلات ومزامنتها سحابياً بنجاح!',
         type: 'success'
       });
     } catch (err: any) {
       console.error('Failed to sync products with cloud database:', err);
-      // Explicit error notification (Rule 2)
       setCartToast({
         message: `تنبيه: فشلت مزامنة السحابة (${err.message || 'مشكلة في الشبكة'}). تم حفظ التعديلات محلياً بنجاح وسوف تظهر لك، ولكنها لم تُرفع للمشاهدين والعملاء بعد.`,
         type: 'error'
@@ -824,7 +798,7 @@ export default function App() {
     
     setInstaLinkInput(savedInsta);
     
-    const savedDbUrl = localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
+    const savedDbUrl = localStorage.getItem('hs_handmade_cloud_db_url') || '/api/kvdb/products';
     setCloudDbUrlInput(savedDbUrl);
     
     setIsInstaModalOpen(true);
@@ -838,18 +812,18 @@ export default function App() {
     setSaveSuccessSettings(false);
 
     const trimmedInsta = instaLinkInput.trim();
-    const trimmedDbUrl = cloudDbUrlInput.trim();
+    const directDbUrl = "/api/kvdb/products";
 
     // 1. Save to localStorage
     localStorage.setItem('hs_instagram_link', trimmedInsta);
-    localStorage.setItem('hs_handmade_cloud_db_url', trimmedDbUrl);
+    localStorage.setItem('hs_handmade_cloud_db_url', directDbUrl);
 
-    // 2. Build settings package (Rule 2)
+    // 2. Build settings package
     const settingsData = {
       instagram: trimmedInsta
     };
 
-    const settingsUrl = getSettingsUrl(trimmedDbUrl);
+    const settingsUrl = "/api/kvdb/settings";
 
     // 3. Save Settings to Cloud Database link (kvdb.io)
     try {
@@ -871,7 +845,7 @@ export default function App() {
 
     // 4. Update in-memory states
     setCurrentSavedLink(trimmedInsta);
-    setCloudDbUrl(trimmedDbUrl);
+    setCloudDbUrl(directDbUrl);
 
     setIsSavingSettings(false);
     setSaveSuccessSettings(true);
@@ -883,7 +857,7 @@ export default function App() {
 
     // Attempt instant cloud synchronization of products
     try {
-      await syncFromCloud(trimmedDbUrl);
+      await syncFromCloud(directDbUrl);
     } catch (err) {
       console.error('Failed to sync products from cloud URL:', err);
     }
@@ -1846,7 +1820,7 @@ export default function App() {
                   <div className="flex items-center justify-between mb-1.5">
                     <button
                       type="button"
-                      onClick={() => setCloudDbUrlInput('https://kvdb.io/MN_hs_handmade_220acadc/products')}
+                      onClick={() => setCloudDbUrlInput('/api/kvdb/products')}
                       className="text-[10px] text-brand-accent hover:underline font-bold"
                     >
                       استعادة الرابط الافتراضي
