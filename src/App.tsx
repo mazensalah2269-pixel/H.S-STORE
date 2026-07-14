@@ -33,7 +33,9 @@ import {
   AlertCircle,
   Download,
   Settings,
-  Database
+  Database,
+  Facebook,
+  MessageCircle
 } from 'lucide-react';
 import { Product, Category, CartItem } from './types';
 import { getInitialProducts, generateHandmadeSVG } from './utils';
@@ -110,6 +112,13 @@ const getActiveDatabaseUrl = () => {
   return localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
 };
 
+const getSettingsUrl = (dbUrl: string) => {
+  if (dbUrl.includes('/products')) {
+    return dbUrl.replace('/products', '/settings');
+  }
+  return dbUrl + '_settings';
+};
+
 export default function App() {
   // Cloud Database URL State (zero-configuration, saves permanently to localStorage)
   const [cloudDbUrl, setCloudDbUrl] = useState(() => {
@@ -118,6 +127,46 @@ export default function App() {
 
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Product modal control states
+  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
+
+  // Instagram, WhatsApp, Facebook and Settings State declarations
+  const [isInstaModalOpen, setIsInstaModalOpen] = useState(false);
+  const [isCheckoutUnavailableModalOpen, setIsCheckoutUnavailableModalOpen] = useState(false);
+  
+  const [currentSavedLink, setCurrentSavedLink] = useState<string | null>(() => {
+    return localStorage.getItem('hs_instagram_link');
+  });
+  const [socialWhatsApp, setSocialWhatsApp] = useState<string | null>(() => {
+    return localStorage.getItem('hs_whatsapp_link');
+  });
+  const [socialFacebook, setSocialFacebook] = useState<string | null>(() => {
+    return localStorage.getItem('hs_facebook_link');
+  });
+
+  const [instaLinkInput, setInstaLinkInput] = useState(() => {
+    const saved = localStorage.getItem('hs_instagram_link');
+    return saved !== null ? saved : '';
+  });
+  const [whatsappLinkInput, setWhatsappLinkInput] = useState(() => {
+    const saved = localStorage.getItem('hs_whatsapp_link');
+    return saved !== null ? saved : '';
+  });
+  const [facebookLinkInput, setFacebookLinkInput] = useState(() => {
+    const saved = localStorage.getItem('hs_facebook_link');
+    return saved !== null ? saved : '';
+  });
+  const [cloudDbUrlInput, setCloudDbUrlInput] = useState(() => {
+    return localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
+  });
+
+  // Trackable saving operations for visual loader spinners (Rule 2)
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [saveSuccessSettings, setSaveSuccessSettings] = useState(false);
+  const [isSavingProduct, setIsSavingProduct] = useState(false);
+  const [saveSuccessProduct, setSaveSuccessProduct] = useState(false);
 
   // Synchronize products array with the configured Cloud Database URL
   const syncFromCloud = useCallback(async (targetUrl: string) => {
@@ -140,6 +189,47 @@ export default function App() {
     return null;
   }, []);
 
+  // Synchronize optional settings (social links) with the configured settings endpoint on kvdb.io (Rule 4)
+  const syncSettingsFromCloud = useCallback(async (targetUrl: string) => {
+    try {
+      const settingsUrl = getSettingsUrl(targetUrl);
+      const response = await fetch(settingsUrl);
+      if (response.ok) {
+        const text = await response.text();
+        if (text && text.trim().startsWith('{')) {
+          const loadedSettings = JSON.parse(text);
+          if (loadedSettings) {
+            if (loadedSettings.instagram !== undefined) {
+              const prev = localStorage.getItem('hs_instagram_link');
+              if (prev !== loadedSettings.instagram) {
+                localStorage.setItem('hs_instagram_link', loadedSettings.instagram);
+                setCurrentSavedLink(loadedSettings.instagram);
+              }
+            }
+            if (loadedSettings.whatsapp !== undefined) {
+              const prev = localStorage.getItem('hs_whatsapp_link');
+              if (prev !== loadedSettings.whatsapp) {
+                localStorage.setItem('hs_whatsapp_link', loadedSettings.whatsapp);
+                setSocialWhatsApp(loadedSettings.whatsapp);
+              }
+            }
+            if (loadedSettings.facebook !== undefined) {
+              const prev = localStorage.getItem('hs_facebook_link');
+              if (prev !== loadedSettings.facebook) {
+                localStorage.setItem('hs_facebook_link', loadedSettings.facebook);
+                setSocialFacebook(loadedSettings.facebook);
+              }
+            }
+            return loadedSettings;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Could not fetch settings from Cloud Database:', e);
+    }
+    return null;
+  }, []);
+
   // Fetch the latest database state on mount and sync in real-time dynamically (global polling)
   useEffect(() => {
     let isMounted = true;
@@ -149,6 +239,9 @@ export default function App() {
       if (isLoading) {
         console.log('Loading products from cloud database:', activeUrl);
       }
+
+      // Sync settings first (Rule 4)
+      await syncSettingsFromCloud(activeUrl);
 
       try {
         const response = await fetch(activeUrl);
@@ -217,9 +310,19 @@ export default function App() {
     // Call once immediately on load
     initAndSync();
 
-    // Setup background real-time sync loop every 3 seconds (lightweight, robust, global)
+    // Setup background real-time sync loop every 8 seconds (lightweight, robust, global) (Rule 3)
     const syncInterval = setInterval(() => {
+      // Opt-out / Pause background requests if the tab is hidden, or if admin is actively editing/setting up (Rule 1)
+      if (document.hidden || isProductModalOpen || isInstaModalOpen) {
+        return;
+      }
+
       async function bgSync() {
+        if (!isMounted) return;
+        
+        // Polling settings (Rule 3 / 4)
+        await syncSettingsFromCloud(activeUrl);
+
         try {
           const response = await fetch(activeUrl);
           if (response.ok) {
@@ -246,13 +349,13 @@ export default function App() {
         }
       }
       bgSync();
-    }, 3000);
+    }, 8000);
 
     return () => {
       isMounted = false;
       clearInterval(syncInterval);
     };
-  }, [cloudDbUrl]);
+  }, [cloudDbUrl, isProductModalOpen, isInstaModalOpen, syncSettingsFromCloud]);
 
   // Expose renderAppGridDisplay globally to dynamically load and display the latest products database
   const renderAppGridDisplay = useCallback(async () => {
@@ -331,17 +434,14 @@ export default function App() {
       console.log('Successfully synchronized products with cloud database.');
     } catch (err) {
       console.error('Failed to sync products with cloud database:', err);
+      throw err;
     }
 
-    // Show toast and reload to refresh the page display dynamically!
+    // Show non-blocking success toast instantly
     setCartToast({
-      message: 'تم حفظ التعديلات ومزامنتها سحابياً بنجاح! جاري تحديث الصفحة...',
+      message: 'تم حفظ التعديلات ومزامنتها سحابياً بنجاح!',
       type: 'success'
     });
-
-    setTimeout(() => {
-      window.location.reload();
-    }, 1200);
   };
 
   // Admin authentication state
@@ -359,9 +459,6 @@ export default function App() {
   const [adminLoginStep, setAdminLoginStep] = useState<1 | 2>(1);
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState<string | null>(null);
-
-  const [isProductModalOpen, setIsProductModalOpen] = useState(false);
-  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
 
   // Lightbox view state
   const [lightbox, setLightbox] = useState<{
@@ -449,20 +546,6 @@ export default function App() {
   });
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [cartToast, setCartToast] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
-
-  // Instagram account link settings state
-  const [isInstaModalOpen, setIsInstaModalOpen] = useState(false);
-  const [isCheckoutUnavailableModalOpen, setIsCheckoutUnavailableModalOpen] = useState(false);
-  const [currentSavedLink, setCurrentSavedLink] = useState<string | null>(() => {
-    return localStorage.getItem('hs_instagram_link');
-  });
-  const [instaLinkInput, setInstaLinkInput] = useState(() => {
-    const saved = localStorage.getItem('hs_instagram_link');
-    return saved !== null ? saved : '';
-  });
-  const [cloudDbUrlInput, setCloudDbUrlInput] = useState(() => {
-    return localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
-  });
 
   // Persist cart to localStorage
   useEffect(() => {
@@ -687,8 +770,13 @@ export default function App() {
   // Admin Store Settings & Cloud Database Control Handlers
   const openInstaModal = () => {
     if (!isAdmin) return;
-    const savedInsta = localStorage.getItem('hs_instagram_link');
-    setInstaLinkInput(savedInsta !== null ? savedInsta : '');
+    const savedInsta = localStorage.getItem('hs_instagram_link') || '';
+    const savedWhatsApp = localStorage.getItem('hs_whatsapp_link') || '';
+    const savedFacebook = localStorage.getItem('hs_facebook_link') || '';
+    
+    setInstaLinkInput(savedInsta);
+    setWhatsappLinkInput(savedWhatsApp);
+    setFacebookLinkInput(savedFacebook);
     
     const savedDbUrl = localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
     setCloudDbUrlInput(savedDbUrl);
@@ -699,31 +787,74 @@ export default function App() {
   const handleSaveStoreSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin) return;
+
+    setIsSavingSettings(true);
+    setSaveSuccessSettings(false);
+
     const trimmedInsta = instaLinkInput.trim();
+    const trimmedWhatsApp = whatsappLinkInput.trim();
+    const trimmedFacebook = facebookLinkInput.trim();
     const trimmedDbUrl = cloudDbUrlInput.trim();
 
+    // 1. Save to localStorage
     localStorage.setItem('hs_instagram_link', trimmedInsta);
-    setCurrentSavedLink(trimmedInsta);
-
+    localStorage.setItem('hs_whatsapp_link', trimmedWhatsApp);
+    localStorage.setItem('hs_facebook_link', trimmedFacebook);
     localStorage.setItem('hs_handmade_cloud_db_url', trimmedDbUrl);
+
+    // 2. Build settings package (Rule 2)
+    const settingsData = {
+      instagram: trimmedInsta,
+      whatsapp: trimmedWhatsApp,
+      facebook: trimmedFacebook
+    };
+
+    const settingsUrl = getSettingsUrl(trimmedDbUrl);
+
+    // 3. Save Settings to Cloud Database link (kvdb.io)
+    try {
+      const response = await fetch(settingsUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(settingsData)
+      });
+      if (!response.ok) {
+        await fetch(settingsUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(settingsData)
+        });
+      }
+    } catch (err) {
+      console.error('Failed to save settings to cloud:', err);
+    }
+
+    // 4. Update in-memory states
+    setCurrentSavedLink(trimmedInsta);
+    setSocialWhatsApp(trimmedWhatsApp);
+    setSocialFacebook(trimmedFacebook);
     setCloudDbUrl(trimmedDbUrl);
-    setIsInstaModalOpen(false);
-    
+
+    setIsSavingSettings(false);
+    setSaveSuccessSettings(true);
+
     setCartToast({
-      message: "تم حفظ إعدادات المتجر وقاعدة البيانات بنجاح! جاري تحديث الصفحة...",
+      message: "تم حفظ الإعدادات وقاعدة البيانات ومزامنتها سحابياً بنجاح!",
       type: 'success'
     });
-    
-    // Attempt instant cloud synchronization
+
+    // Attempt instant cloud synchronization of products
     try {
       await syncFromCloud(trimmedDbUrl);
     } catch (err) {
-      console.error('Failed to sync from cloud URL:', err);
+      console.error('Failed to sync products from cloud URL:', err);
     }
 
+    // Close settings modal after 1.5 seconds
     setTimeout(() => {
-      window.location.reload();
-    }, 1200);
+      setIsInstaModalOpen(false);
+      setSaveSuccessSettings(false);
+    }, 1500);
   };
 
   // Open modal for creating product
@@ -812,8 +943,8 @@ export default function App() {
     setFormImages(prev => prev.filter((_, idx) => idx !== indexToRemove));
   };
 
-  // Add/Edit Save handler
-  const handleSaveProduct = (e: React.FormEvent) => {
+  // Add/Edit Save handler (Rule 2)
+  const handleSaveProduct = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!formTitle.trim()) {
@@ -836,6 +967,10 @@ export default function App() {
       setFormError('Please upload at least one product image from your device');
       return;
     }
+
+    setIsSavingProduct(true);
+    setFormError(null);
+    setSaveSuccessProduct(false);
 
     const discountValue = formDiscountPercentage === '' ? 0 : Number(formDiscountPercentage);
 
@@ -873,14 +1008,26 @@ export default function App() {
       updatedProducts = [newProduct, ...products];
     }
 
-    saveProducts(updatedProducts);
-    localStorage.removeItem('hs_handmade_form_draft');
+    try {
+      await saveProducts(updatedProducts);
+      localStorage.removeItem('hs_handmade_form_draft');
+      setSaveSuccessProduct(true);
+      
+      if (typeof (window as any).renderAppGridDisplay === 'function') {
+        (window as any).renderAppGridDisplay();
+      }
 
-    setIsProductModalOpen(false);
-    setEditingProduct(null);
-
-    if (typeof (window as any).renderAppGridDisplay === 'function') {
-      (window as any).renderAppGridDisplay();
+      // Close modal smoothly after success indicator
+      setTimeout(() => {
+        setIsProductModalOpen(false);
+        setEditingProduct(null);
+        setSaveSuccessProduct(false);
+      }, 1500);
+    } catch (err: any) {
+      console.error('Error saving product:', err);
+      setFormError('فشلت المزامنة السحابية. يرجى التحقق من اتصالك بالإنترنت والمحاولة مجدداً.');
+    } finally {
+      setIsSavingProduct(false);
     }
   };
 
@@ -1432,8 +1579,44 @@ export default function App() {
             </p>
           </div>
           
-          <div className="flex flex-wrap items-center justify-center gap-6">
-            <span className="text-white/60">© 2026 H.S HandMade Workshop. All rights reserved.</span>
+          <div className="flex flex-col items-center md:items-end gap-3.5">
+            {/* Dynamic Social Icons (Rule 4) */}
+            <div className="flex items-center gap-3">
+              {currentSavedLink && currentSavedLink.trim() !== '' && (
+                <a
+                  href={currentSavedLink.startsWith('http') ? currentSavedLink.trim() : `https://instagram.com/${currentSavedLink.trim()}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/15 hover:text-white flex items-center justify-center transition-all text-white/70 border border-white/5"
+                  title="Instagram"
+                >
+                  <Instagram className="w-4 h-4" />
+                </a>
+              )}
+              {socialWhatsApp && socialWhatsApp.trim() !== '' && (
+                <a
+                  href={`https://wa.me/${socialWhatsApp.trim().replace(/[^0-9]/g, '')}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/15 hover:text-white flex items-center justify-center transition-all text-white/70 border border-white/5"
+                  title="WhatsApp"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                </a>
+              )}
+              {socialFacebook && socialFacebook.trim() !== '' && (
+                <a
+                  href={socialFacebook.startsWith('http') ? socialFacebook.trim() : `https://facebook.com/${socialFacebook.trim()}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-8 h-8 rounded-full bg-white/5 hover:bg-white/15 hover:text-white flex items-center justify-center transition-all text-white/70 border border-white/5"
+                  title="Facebook"
+                >
+                  <Facebook className="w-4 h-4" />
+                </a>
+              )}
+            </div>
+            <span className="text-white/40 text-[11px]">© 2026 H.S HandMade Workshop. All rights reserved.</span>
           </div>
         </div>
       </footer>
@@ -1611,8 +1794,9 @@ export default function App() {
               <form onSubmit={handleSaveStoreSettings} className="space-y-4">
                 {/* 1. Instagram Link */}
                 <div className="text-right" dir="rtl">
-                  <label className="block text-xs font-bold uppercase tracking-wider text-brand-ink/80 mb-1.5">
-                    رابط أو اسم مستخدم حساب إنستغرام
+                  <label className="block text-xs font-bold uppercase tracking-wider text-brand-ink/80 mb-1.5 flex items-center justify-end gap-1.5">
+                    <Instagram className="w-3.5 h-3.5 text-brand-accent" />
+                    <span>رابط أو اسم مستخدم حساب إنستغرام (اختياري)</span>
                   </label>
                   <input
                     type="text"
@@ -1627,7 +1811,45 @@ export default function App() {
                   </p>
                 </div>
 
-                {/* 2. Cloud Database URL */}
+                {/* 2. WhatsApp Number */}
+                <div className="text-right border-t border-brand-ink/10 pt-4" dir="rtl">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-brand-ink/80 mb-1.5 flex items-center justify-end gap-1.5">
+                    <MessageCircle className="w-3.5 h-3.5 text-emerald-500" />
+                    <span>رقم واتساب للمتجر (اختياري)</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="مثال: +966500000000"
+                    value={whatsappLinkInput}
+                    onChange={(e) => setWhatsappLinkInput(e.target.value)}
+                    className="w-full bg-brand-bg text-brand-ink text-sm px-3.5 py-2.5 rounded-none border border-brand-ink/15 focus:outline-none focus:border-brand-accent text-left font-mono"
+                    dir="ltr"
+                  />
+                  <p className="text-[10px] text-brand-ink/50 mt-1 leading-relaxed">
+                    رقم الواتساب الخاص بالمتجر للتواصل المباشر مع العملاء.
+                  </p>
+                </div>
+
+                {/* 3. Facebook Page Link */}
+                <div className="text-right border-t border-brand-ink/10 pt-4" dir="rtl">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-brand-ink/80 mb-1.5 flex items-center justify-end gap-1.5">
+                    <Facebook className="w-3.5 h-3.5 text-blue-600" />
+                    <span>رابط صفحة فيسبوك للمتجر (اختياري)</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="مثال: hs.handmade"
+                    value={facebookLinkInput}
+                    onChange={(e) => setFacebookLinkInput(e.target.value)}
+                    className="w-full bg-brand-bg text-brand-ink text-sm px-3.5 py-2.5 rounded-none border border-brand-ink/15 focus:outline-none focus:border-brand-accent text-left font-mono"
+                    dir="ltr"
+                  />
+                  <p className="text-[10px] text-brand-ink/50 mt-1 leading-relaxed">
+                    رابط أو اسم مستخدم صفحة فيسبوك لعرض متجرك على منصة فيسبوك.
+                  </p>
+                </div>
+
+                {/* 4. Cloud Database URL */}
                 <div className="text-right border-t border-brand-ink/10 pt-4" dir="rtl">
                   <div className="flex items-center justify-between mb-1.5">
                     <button
@@ -1650,11 +1872,6 @@ export default function App() {
                     dir="ltr"
                     required
                   />
-                  <div className="bg-amber-50 border border-amber-500/10 p-3 mt-2 text-[11px] text-amber-900 leading-relaxed space-y-1.5">
-                    <p>
-                      <strong>مزامنة تلقائية 100%:</strong> تم دمج قاعدة بيانات سحابية مجانية فائقة السرعة. أي تعديل في المنتجات، الخصومات، والتوفر سيتم حفظه ومزامنته للجميع في نفس اللحظة دون الحاجة لملفات يدوية!
-                    </p>
-                  </div>
                 </div>
 
                 {/* Actions */}
@@ -1668,9 +1885,22 @@ export default function App() {
                   </button>
                   <button
                     type="submit"
-                    className="bg-brand-accent hover:bg-brand-accent/90 text-white px-5 py-2 rounded-none text-xs font-bold uppercase tracking-wider transition-all shadow-xs cursor-pointer"
+                    disabled={isSavingSettings}
+                    className="bg-brand-accent hover:bg-brand-accent/90 disabled:bg-brand-accent/50 text-white px-5 py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition-all shadow-xs flex items-center gap-2 cursor-pointer"
                   >
-                    حفظ الإعدادات (Save Settings)
+                    {isSavingSettings ? (
+                      <>
+                        <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
+                        <span>جاري الحفظ (Saving...)</span>
+                      </>
+                    ) : saveSuccessSettings ? (
+                      <>
+                        <CheckCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span>تم الحفظ (Saved!)</span>
+                      </>
+                    ) : (
+                      <span>تم (Done)</span>
+                    )}
                   </button>
                 </div>
               </form>
@@ -1958,9 +2188,22 @@ export default function App() {
                   </button>
                   <button
                     type="submit"
-                    className="bg-brand-accent hover:bg-brand-accent/90 text-white px-6 py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition-all shadow-xs"
+                    disabled={isSavingProduct}
+                    className="bg-brand-accent hover:bg-brand-accent/90 disabled:bg-brand-accent/50 text-white px-6 py-2.5 rounded-none text-xs font-bold uppercase tracking-wider transition-all shadow-xs flex items-center gap-2 cursor-pointer"
                   >
-                    {editingProduct ? 'Update Masterpiece' : 'Save & Publish'}
+                    {isSavingProduct ? (
+                      <>
+                        <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin shrink-0" />
+                        <span>جاري الحفظ (Saving...)</span>
+                      </>
+                    ) : saveSuccessProduct ? (
+                      <>
+                        <CheckCircle className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span>تم الحفظ بنجاح (Saved!)</span>
+                      </>
+                    ) : (
+                      <span>{editingProduct ? 'تعديل ونشر (Update & Publish)' : 'حفظ ونشر (Save & Publish)'}</span>
+                    )}
                   </button>
                 </div>
 
