@@ -33,8 +33,7 @@ import {
   AlertCircle,
   Download,
   Settings,
-  Database,
-  MessageCircle
+  Database
 } from 'lucide-react';
 import { Product, Category, CartItem } from './types';
 import { getInitialProducts, generateHandmadeSVG } from './utils';
@@ -176,12 +175,16 @@ export default function App() {
         const text = await response.text();
         if (text && text.trim().startsWith('[')) {
           const loadedProducts = JSON.parse(text);
-          if (Array.isArray(loadedProducts) && loadedProducts.length > 0) {
+          if (Array.isArray(loadedProducts)) {
             setProducts(loadedProducts);
             localStorage.setItem('hs_handmade_products', JSON.stringify(loadedProducts));
             return loadedProducts;
           }
         }
+      } else if (response.status === 404) {
+        console.log('Database not yet initialized on cloud (404). Falling back quietly.');
+      } else {
+        console.warn(`Cloud fetch returned status: ${response.status}`);
       }
     } catch (e) {
       console.warn('Could not fetch products from Cloud Database:', e);
@@ -209,6 +212,10 @@ export default function App() {
             return loadedSettings;
           }
         }
+      } else if (response.status === 404) {
+        console.log('Settings not yet initialized on cloud (404). Falling back quietly.');
+      } else {
+        console.warn(`Settings cloud fetch returned status: ${response.status}`);
       }
     } catch (e) {
       console.warn('Could not fetch settings from Cloud Database:', e);
@@ -247,9 +254,27 @@ export default function App() {
               }
             }
           }
+        } else if (response.status === 404) {
+          // Rule 1: A 404 means "No database created yet". Fall back quietly without alert.
+          console.log('Database not yet initialized on cloud (404). Falling back quietly.');
+        } else {
+          // Rule 1: Show actual error message if status is something else entirely (e.g., 500, 403)
+          if (isMounted) {
+            setCartToast({
+              message: `تنبيه: فشلت مزامنة السحابة (رمز الحالة ${response.status}). يتم العرض من الذاكرة المحلية مؤقتاً.`,
+              type: 'error'
+            });
+          }
         }
-      } catch (e) {
+      } catch (e: any) {
         console.warn('Could not fetch products from Cloud Database on mount:', e);
+        // Rule 1: Show actual error message if network is completely down
+        if (isMounted) {
+          setCartToast({
+            message: `تنبيه: تعذر الاتصال بخادم السحابة. تحقق من اتصالك بالإنترنت.`,
+            type: 'error'
+          });
+        }
       }
 
       if (success) return;
@@ -338,6 +363,10 @@ export default function App() {
                 }
               }
             }
+          } else if (response.status === 404) {
+            // Quiet skip
+          } else {
+            console.warn(`Background poll failed with status: ${response.status}`);
           }
         } catch (e) {
           // Quiet background network warning
@@ -650,6 +679,10 @@ export default function App() {
   // Cart operations
   const handleAddToCart = (product: Product) => {
     if (!currentSavedLink || currentSavedLink.trim() === '') {
+      setCartToast({
+        message: "عفوا الطلب غير متاح حاليا",
+        type: 'error'
+      });
       setIsCheckoutUnavailableModalOpen(true);
       return;
     }
@@ -687,6 +720,10 @@ export default function App() {
     
     // Validation check: define "Not Configured" as empty, null, undefined, or left as a blank placeholder.
     if (!currentSavedLink || currentSavedLink.trim() === '') {
+      setCartToast({
+        message: "عفوا الطلب غير متاح حاليا",
+        type: 'error'
+      });
       setIsCheckoutUnavailableModalOpen(true);
       return;
     }
@@ -1340,6 +1377,10 @@ export default function App() {
                       referrerPolicy="no-referrer"
                       onClick={() => {
                         if (!currentSavedLink || currentSavedLink.trim() === '') {
+                          setCartToast({
+                            message: "عفوا الطلب غير متاح حاليا",
+                            type: 'error'
+                          });
                           setIsCheckoutUnavailableModalOpen(true);
                           return;
                         }
@@ -2455,7 +2496,13 @@ export default function App() {
                     </button>
                   ) : (
                     <button
-                      onClick={() => setIsCheckoutUnavailableModalOpen(true)}
+                      onClick={() => {
+                        setCartToast({
+                          message: "عفوا الطلب غير متاح حاليا",
+                          type: 'error'
+                        });
+                        setIsCheckoutUnavailableModalOpen(true);
+                      }}
                       className="w-full flex items-center justify-center gap-2.5 bg-gray-400 text-white py-3.5 px-4 text-xs font-bold uppercase tracking-wider rounded-none text-center cursor-pointer active:scale-[0.99]"
                     >
                       <ShoppingCart className="w-4 h-4 shrink-0" />
