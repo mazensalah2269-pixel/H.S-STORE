@@ -124,8 +124,23 @@ export default function App() {
     return localStorage.getItem('hs_handmade_cloud_db_url') || 'https://kvdb.io/MN_hs_handmade_220acadc/products';
   });
 
-  const [products, setProducts] = useState<Product[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [products, setProducts] = useState<Product[]>(() => {
+    const cached = localStorage.getItem('hs_handmade_products');
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
+      } catch (e) {
+        console.error('Failed to parse cached products on init:', e);
+      }
+    }
+    return getInitialProducts();
+  });
+  const [isLoading, setIsLoading] = useState(() => {
+    return !localStorage.getItem('hs_handmade_products');
+  });
 
   // Product modal control states
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
@@ -290,7 +305,7 @@ export default function App() {
     // Call once immediately on load
     initAndSync();
 
-    // Setup background real-time sync loop every 5 seconds (snappy and lightweight)
+    // Setup background real-time sync loop every 4 seconds (strict 4-second interval for customers/viewers - Rule 3)
     const syncInterval = setInterval(() => {
       // Opt-out / Pause background requests if the tab is hidden, or if admin is actively editing/setting up
       if (document.hidden || isProductModalOpen || isInstaModalOpen) {
@@ -300,7 +315,7 @@ export default function App() {
       async function bgSync() {
         if (!isMounted) return;
         
-        // Polling settings (Rule 3 / 4)
+        // Polling settings
         await syncSettingsFromCloud(activeUrl);
 
         try {
@@ -329,7 +344,7 @@ export default function App() {
         }
       }
       bgSync();
-    }, 5000);
+    }, 4000);
 
     return () => {
       isMounted = false;
@@ -379,10 +394,11 @@ export default function App() {
 
   // Save products to state, localStorage, local backup API, and persistent cloud database URL
   const saveProducts = async (updatedProducts: Product[]) => {
+    // Instantly update state and localStorage backup (Rule 1a)
     setProducts(updatedProducts);
     localStorage.setItem('hs_handmade_products', JSON.stringify(updatedProducts));
     
-    // 1. Sync with the local Express backup file API
+    // 1. Sync with the local Express backup file API in background
     fetch('/api/products', {
       method: 'POST',
       headers: {
@@ -391,7 +407,7 @@ export default function App() {
       body: JSON.stringify({ products: updatedProducts })
     }).catch(err => console.error('Error syncing products with backup server:', err));
 
-    // 2. Sync with the persistent Cloud Database URL
+    // 2. Sync with the persistent Cloud Database URL (Rule 1b)
     const activeUrl = getActiveDatabaseUrl();
     try {
       const response = await fetch(activeUrl, {
@@ -403,25 +419,33 @@ export default function App() {
       });
       if (!response.ok) {
         // If PUT is not supported or fails, try standard POST
-        await fetch(activeUrl, {
+        const fallbackResponse = await fetch(activeUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json'
           },
           body: JSON.stringify(updatedProducts)
         });
+        if (!fallbackResponse.ok) {
+          throw new Error(`استجابة خادم السحابة غير ناجحة (كود ${fallbackResponse.status})`);
+        }
       }
       console.log('Successfully synchronized products with cloud database.');
-    } catch (err) {
+      
+      // Show non-blocking success toast instantly
+      setCartToast({
+        message: 'تم حفظ التعديلات ومزامنتها سحابياً بنجاح!',
+        type: 'success'
+      });
+    } catch (err: any) {
       console.error('Failed to sync products with cloud database:', err);
+      // Explicit error notification (Rule 2)
+      setCartToast({
+        message: `تنبيه: فشلت مزامنة السحابة (${err.message || 'مشكلة في الشبكة'}). تم حفظ التعديلات محلياً بنجاح وسوف تظهر لك، ولكنها لم تُرفع للمشاهدين والعملاء بعد.`,
+        type: 'error'
+      });
       throw err;
     }
-
-    // Show non-blocking success toast instantly
-    setCartToast({
-      message: 'تم حفظ التعديلات ومزامنتها سحابياً بنجاح!',
-      type: 'success'
-    });
   };
 
   // Admin authentication state
@@ -1691,14 +1715,14 @@ export default function App() {
                 </div>
                 
                 <h3 className="font-sans font-bold text-base text-brand-ink mt-2">
-                  عفواً، رابط حساب إنستغرام مطلوب!
+                  عفوا الطلب غير متاح حاليا
                 </h3>
                 
                 <p className="text-xs text-brand-ink/65 leading-relaxed" dir="rtl">
                   {isAdmin ? (
-                    "بصفتك مديراً، يرجى الدخول إلى إعدادات المتجر وتعيين رابط أو اسم مستخدم حساب إنستغرام لتفعيل إمكانية تصفح تفاصيل المنتجات وتلقي الطلبات بنجاح."
+                    "بصفتك مديراً، يرجى الدخول إلى إعدادات المتجر وتعيين رابط أو معرف حساب إنستغرام لتفعيل إمكانية تلقي الطلبات وعرض تفاصيل المنتجات."
                   ) : (
-                    "نعتذر عن الإزعاج، الطلب وعرض تفاصيل المنتجات معطل حالياً لعدم ربط حساب إنستغرام بالمتجر. يرجى من مدير الموقع ضبط الإعدادات أولاً."
+                    "نعتذر عن الإزعاج، عملية الشراء والطلب معطلة مؤقتاً لعدم وجود رابط حساب إنستغرام مفعّل. يرجى التواصل مع إدارة الموقع لتعديله."
                   )}
                 </p>
                 
