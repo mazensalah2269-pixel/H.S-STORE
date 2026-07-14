@@ -229,14 +229,32 @@ export default function App() {
     const activeUrl = getActiveDatabaseUrl();
 
     async function initAndSync() {
-      if (isMounted) {
+      // Rule 3: Check localStorage FIRST. If there is saved data, render it immediately.
+      const cached = localStorage.getItem('hs_handmade_products');
+      let hasLocalData = false;
+      if (cached) {
+        try {
+          const loadedProducts = JSON.parse(cached);
+          if (Array.isArray(loadedProducts) && loadedProducts.length > 0) {
+            if (isMounted) {
+              setProducts(loadedProducts);
+              setIsLoading(false);
+              hasLocalData = true;
+            }
+          }
+        } catch (e) {
+          console.error('Failed to parse cached products on init:', e);
+        }
+      }
+
+      if (isMounted && !hasLocalData) {
         setIsLoading(true);
       }
 
       // 1. Sync settings first
       await syncSettingsFromCloud(activeUrl);
 
-      let success = false;
+      let cloudSuccess = false;
 
       // 2. Try fetching from the cloud database URL (kvdb.io)
       try {
@@ -250,7 +268,7 @@ export default function App() {
                 setProducts(loadedProducts);
                 localStorage.setItem('hs_handmade_products', JSON.stringify(loadedProducts));
                 setIsLoading(false);
-                success = true;
+                cloudSuccess = true;
               }
             }
           }
@@ -277,9 +295,17 @@ export default function App() {
         }
       }
 
-      if (success) return;
+      if (cloudSuccess) return;
 
-      // 3. Try fallback to local express backup server
+      // Rule 3: If kvdb.io returns 404 or fails, do NOT overwrite the localStorage data with defaults. Keep the localStorage data active.
+      if (hasLocalData) {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+        return;
+      }
+
+      // 3. Try fallback to local express backup server (only if we have absolutely no local data)
       try {
         const response = await fetch('/api/products');
         if (response.ok) {
@@ -289,7 +315,7 @@ export default function App() {
               setProducts(serverProducts);
               localStorage.setItem('hs_handmade_products', JSON.stringify(serverProducts));
               setIsLoading(false);
-              success = true;
+              return;
             }
           }
         }
@@ -297,28 +323,7 @@ export default function App() {
         console.error('Failed to sync products from backup server:', err);
       }
 
-      if (success) return;
-
-      // 4. Try fallback to localStorage cached products
-      const cached = localStorage.getItem('hs_handmade_products');
-      if (cached) {
-        try {
-          const loadedProducts = JSON.parse(cached);
-          if (Array.isArray(loadedProducts)) {
-            if (isMounted) {
-              setProducts(loadedProducts);
-              setIsLoading(false);
-              success = true;
-            }
-          }
-        } catch (e) {
-          console.error('Failed to parse cached products:', e);
-        }
-      }
-
-      if (success) return;
-
-      // 5. Absolute fallback: load default initial products
+      // 4. Absolute fallback: load default initial products (only if we have absolutely no local data)
       if (isMounted) {
         const defaults = getInitialProducts();
         setProducts(defaults);
@@ -330,7 +335,7 @@ export default function App() {
     // Call once immediately on load
     initAndSync();
 
-    // Setup background real-time sync loop every 4 seconds (strict 4-second interval for customers/viewers - Rule 3)
+    // Setup background real-time sync loop every 5 seconds (strict 5-second interval for customers/viewers - Rule 4)
     const syncInterval = setInterval(() => {
       // Opt-out / Pause background requests if the tab is hidden, or if admin is actively editing/setting up
       if (document.hidden || isProductModalOpen || isInstaModalOpen) {
@@ -364,7 +369,7 @@ export default function App() {
               }
             }
           } else if (response.status === 404) {
-            // Quiet skip
+            // Rule 4: If the fetch returns a 404, do nothing.
           } else {
             console.warn(`Background poll failed with status: ${response.status}`);
           }
@@ -373,7 +378,7 @@ export default function App() {
         }
       }
       bgSync();
-    }, 4000);
+    }, 5000);
 
     return () => {
       isMounted = false;
