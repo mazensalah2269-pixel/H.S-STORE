@@ -100,21 +100,7 @@ async function verifySecondPassword(input: string): Promise<boolean> {
  *    be synced globally for all customers in real-time instantly.
  * ---------------------------------------------------------------------------------
  */
-const CLOUD_DATABASE_URL: string = "/api/kvdb/products";
-
-// Determine the active database URL
-const getActiveDatabaseUrl = () => {
-  return "/api/kvdb/products";
-};
-
-const getSettingsUrl = (dbUrl: string) => {
-  return "/api/kvdb/settings";
-};
-
 export default function App() {
-  // Cloud Database URL State
-  const [cloudDbUrl, setCloudDbUrl] = useState("/api/kvdb/products");
-
   const [products, setProducts] = useState<Product[]>(() => {
     const cached = localStorage.getItem('hs_handmade_products');
     if (cached) {
@@ -129,9 +115,7 @@ export default function App() {
     }
     return getInitialProducts();
   });
-  const [isLoading, setIsLoading] = useState(() => {
-    return !localStorage.getItem('hs_handmade_products');
-  });
+  const [isLoading, setIsLoading] = useState(false);
 
   // Product modal control states
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
@@ -149,7 +133,6 @@ export default function App() {
     const saved = localStorage.getItem('hs_instagram_link');
     return saved !== null ? saved : '';
   });
-  const [cloudDbUrlInput, setCloudDbUrlInput] = useState("/api/kvdb/products");
 
   // Trackable saving operations for visual loader spinners (Rule 2)
   const [isSavingSettings, setIsSavingSettings] = useState(false);
@@ -157,246 +140,8 @@ export default function App() {
   const [isSavingProduct, setIsSavingProduct] = useState(false);
   const [saveSuccessProduct, setSaveSuccessProduct] = useState(false);
 
-  // Synchronize products array with the configured Cloud Database URL
-  const syncFromCloud = useCallback(async (targetUrl: string) => {
-    try {
-      const response = await fetch(targetUrl);
-      if (response.ok) {
-        const text = await response.text();
-        if (text && text.trim().startsWith('[')) {
-          const loadedProducts = JSON.parse(text);
-          if (Array.isArray(loadedProducts)) {
-            setProducts(loadedProducts);
-            localStorage.setItem('hs_handmade_products', JSON.stringify(loadedProducts));
-            return loadedProducts;
-          }
-        }
-      } else if (response.status === 404) {
-        console.log('Database not yet initialized on cloud (404). Falling back quietly.');
-      } else {
-        console.warn(`Cloud fetch returned status: ${response.status}`);
-      }
-    } catch (e) {
-      console.warn('Could not fetch products from Cloud Database:', e);
-    }
-    return null;
-  }, []);
-
-  // Synchronize optional settings (social links) with the configured settings endpoint on kvdb.io (Rule 4)
-  const syncSettingsFromCloud = useCallback(async (targetUrl: string) => {
-    try {
-      const settingsUrl = getSettingsUrl(targetUrl);
-      const response = await fetch(settingsUrl);
-      if (response.ok) {
-        const text = await response.text();
-        if (text && text.trim().startsWith('{')) {
-          const loadedSettings = JSON.parse(text);
-          if (loadedSettings) {
-            if (loadedSettings.instagram !== undefined) {
-              const prev = localStorage.getItem('hs_instagram_link');
-              if (prev !== loadedSettings.instagram) {
-                localStorage.setItem('hs_instagram_link', loadedSettings.instagram);
-                setCurrentSavedLink(loadedSettings.instagram);
-              }
-            }
-            return loadedSettings;
-          }
-        }
-      } else if (response.status === 404) {
-        console.log('Settings not yet initialized on cloud (404). Falling back quietly.');
-      } else {
-        console.warn(`Settings cloud fetch returned status: ${response.status}`);
-      }
-    } catch (e) {
-      console.warn('Could not fetch settings from Cloud Database:', e);
-    }
-    return null;
-  }, []);
-
-  // Fetch the latest database state on mount and sync in real-time dynamically (global polling)
-  useEffect(() => {
-    let isMounted = true;
-    const activeUrl = getActiveDatabaseUrl();
-
-    async function initAndSync() {
-      // Rule 3: Check localStorage FIRST. If there is saved data, render it immediately.
-      const cached = localStorage.getItem('hs_handmade_products');
-      let hasLocalData = false;
-      if (cached) {
-        try {
-          const loadedProducts = JSON.parse(cached);
-          if (Array.isArray(loadedProducts) && loadedProducts.length > 0) {
-            if (isMounted) {
-              setProducts(loadedProducts);
-              setIsLoading(false);
-              hasLocalData = true;
-            }
-          }
-        } catch (e) {
-          console.error('Failed to parse cached products on init:', e);
-        }
-      }
-
-      if (isMounted && !hasLocalData) {
-        setIsLoading(true);
-      }
-
-      // 1. Sync settings first
-      await syncSettingsFromCloud(activeUrl);
-
-      let cloudSuccess = false;
-
-      // 2. Try fetching from the cloud database URL (kvdb.io)
-      try {
-        const response = await fetch(activeUrl);
-        if (response.ok) {
-          const text = await response.text();
-          if (text && text.trim().startsWith('[')) {
-            const loadedProducts = JSON.parse(text);
-            if (Array.isArray(loadedProducts)) {
-              if (isMounted) {
-                setProducts(loadedProducts);
-                localStorage.setItem('hs_handmade_products', JSON.stringify(loadedProducts));
-                setIsLoading(false);
-                cloudSuccess = true;
-              }
-            }
-          }
-        } else if (response.status === 404) {
-          // Rule 1: A 404 means "No database created yet". Fall back quietly without alert.
-          console.log('Database not yet initialized on cloud (404). Falling back quietly.');
-        } else {
-          // Rule 1: Show actual error message if status is something else entirely (e.g., 500, 403)
-          if (isMounted) {
-            setCartToast({
-              message: `تنبيه: فشلت مزامنة السحابة (رمز الحالة ${response.status}). يتم العرض من الذاكرة المحلية مؤقتاً.`,
-              type: 'error'
-            });
-          }
-        }
-      } catch (e: any) {
-        console.warn('Could not fetch products from Cloud Database on mount:', e);
-        // Rule 1: Show actual error message if network is completely down
-        if (isMounted) {
-          setCartToast({
-            message: `تنبيه: تعذر الاتصال بخادم السحابة. تحقق من اتصالك بالإنترنت.`,
-            type: 'error'
-          });
-        }
-      }
-
-      if (cloudSuccess) return;
-
-      // Rule 3: If kvdb.io returns 404 or fails, do NOT overwrite the localStorage data with defaults. Keep the localStorage data active.
-      if (hasLocalData) {
-        if (isMounted) {
-          setIsLoading(false);
-        }
-        return;
-      }
-
-      // 3. Try fallback to local express backup server (only if we have absolutely no local data)
-      try {
-        const response = await fetch('/api/products');
-        if (response.ok) {
-          const serverProducts = await response.json();
-          if (serverProducts && Array.isArray(serverProducts)) {
-            if (isMounted) {
-              setProducts(serverProducts);
-              localStorage.setItem('hs_handmade_products', JSON.stringify(serverProducts));
-              setIsLoading(false);
-              return;
-            }
-          }
-        }
-      } catch (err) {
-        console.error('Failed to sync products from backup server:', err);
-      }
-
-      // 4. Absolute fallback: load default initial products (only if we have absolutely no local data)
-      if (isMounted) {
-        const defaults = getInitialProducts();
-        setProducts(defaults);
-        localStorage.setItem('hs_handmade_products', JSON.stringify(defaults));
-        setIsLoading(false);
-      }
-    }
-
-    // Call once immediately on load
-    initAndSync();
-
-    // Setup background real-time sync loop every 4 seconds (strict 4-second interval for customers/viewers - Rule 3)
-    const syncInterval = setInterval(() => {
-      // Opt-out / Pause background requests if the tab is hidden, or if admin is actively editing/setting up
-      if (document.hidden || isProductModalOpen || isInstaModalOpen) {
-        return;
-      }
-
-      async function bgSync() {
-        if (!isMounted) return;
-        
-        // Polling settings
-        await syncSettingsFromCloud(activeUrl);
-
-        try {
-          const response = await fetch(activeUrl);
-          if (response.ok) {
-            const text = await response.text();
-            if (text && text.trim().startsWith('[')) {
-              const loadedProducts = JSON.parse(text);
-              if (Array.isArray(loadedProducts)) {
-                if (isMounted) {
-                  setProducts(prevProducts => {
-                    const prevStr = JSON.stringify(prevProducts);
-                    const nextStr = JSON.stringify(loadedProducts);
-                    if (prevStr !== nextStr) {
-                      localStorage.setItem('hs_handmade_products', nextStr);
-                      return loadedProducts;
-                    }
-                    return prevProducts;
-                  });
-                }
-              }
-            }
-          } else if (response.status === 404) {
-            // Rule 4: If the fetch returns a 404, do nothing.
-          } else {
-            console.warn(`Background poll failed with status: ${response.status}`);
-          }
-        } catch (e) {
-          // Quiet background network warning
-        }
-      }
-      bgSync();
-    }, 4000);
-
-    return () => {
-      isMounted = false;
-      clearInterval(syncInterval);
-    };
-  }, [isProductModalOpen, isInstaModalOpen, syncSettingsFromCloud]);
-
   // Expose renderAppGridDisplay globally to dynamically load and display the latest products database
   const renderAppGridDisplay = useCallback(async () => {
-    const activeUrl = getActiveDatabaseUrl();
-    const cloudProducts = await syncFromCloud(activeUrl);
-    if (cloudProducts) return;
-
-    // Fallback to local server API
-    try {
-      const response = await fetch('/api/products');
-      if (response.ok) {
-        const serverProducts = await response.json();
-        if (serverProducts && Array.isArray(serverProducts)) {
-          setProducts(serverProducts);
-          localStorage.setItem('hs_handmade_products', JSON.stringify(serverProducts));
-          return;
-        }
-      }
-    } catch (e) {
-      console.warn('Network error loading products from backup server:', e);
-    }
-
     // Fallback to localStorage
     const saved = localStorage.getItem('hs_handmade_products');
     if (saved) {
@@ -407,7 +152,7 @@ export default function App() {
         console.error('Error in renderAppGridDisplay loading products', e);
       }
     }
-  }, [cloudDbUrl, syncFromCloud]);
+  }, []);
 
   useEffect(() => {
     (window as any).renderAppGridDisplay = renderAppGridDisplay;
@@ -416,44 +161,22 @@ export default function App() {
     };
   }, [renderAppGridDisplay]);
 
-  // Save products to state, localStorage, local backup API, and persistent cloud database URL
+  // Save products to state and localStorage instantly and stably
   const saveProducts = async (updatedProducts: Product[]) => {
-    // FIRST, instantly save the new data to the browser's localStorage (as an instant local backup)
     setProducts(updatedProducts);
     localStorage.setItem('hs_handmade_products', JSON.stringify(updatedProducts));
     
-    // Sync with local backup API silently in background if needed
+    // Sync with local backup API silently in background if needed (no-op if server is not run)
     fetch('/api/products', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ products: updatedProducts })
     }).catch(() => {});
 
-    // SECOND, send the updated data to kvdb.io via a clean HTTP PUT request
-    const activeUrl = "/api/kvdb/products";
-    try {
-      const response = await fetch(activeUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updatedProducts)
-      });
-      if (!response.ok) {
-        throw new Error(`استجابة خادم السحابة غير ناجحة (كود ${response.status})`);
-      }
-      console.log('Successfully synchronized products with cloud database.');
-      
-      setCartToast({
-        message: 'تم حفظ التعديلات ومزامنتها سحابياً بنجاح!',
-        type: 'success'
-      });
-    } catch (err: any) {
-      console.error('Failed to sync products with cloud database:', err);
-      setCartToast({
-        message: `تنبيه: فشلت مزامنة السحابة (${err.message || 'مشكلة في الشبكة'}). تم حفظ التعديلات محلياً بنجاح وسوف تظهر لك، ولكنها لم تُرفع للمشاهدين والعملاء بعد.`,
-        type: 'error'
-      });
-      throw err;
-    }
+    setCartToast({
+      message: 'تم حفظ التعديلات بنجاح!',
+      type: 'success'
+    });
   };
 
   // Admin authentication state
@@ -791,20 +514,16 @@ export default function App() {
     });
   }, [products]);
 
-  // Admin Store Settings & Cloud Database Control Handlers
+  // Admin Store Settings & Control Handlers
   const openInstaModal = () => {
     if (!isAdmin) return;
     const savedInsta = localStorage.getItem('hs_instagram_link') || '';
     
     setInstaLinkInput(savedInsta);
-    
-    const savedDbUrl = localStorage.getItem('hs_handmade_cloud_db_url') || '/api/kvdb/products';
-    setCloudDbUrlInput(savedDbUrl);
-    
     setIsInstaModalOpen(true);
   };
 
-  const handleSaveStoreSettings = async (e: React.FormEvent) => {
+  const handleSaveStoreSettings = (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin) return;
 
@@ -812,55 +531,20 @@ export default function App() {
     setSaveSuccessSettings(false);
 
     const trimmedInsta = instaLinkInput.trim();
-    const directDbUrl = "/api/kvdb/products";
 
     // 1. Save to localStorage
     localStorage.setItem('hs_instagram_link', trimmedInsta);
-    localStorage.setItem('hs_handmade_cloud_db_url', directDbUrl);
 
-    // 2. Build settings package
-    const settingsData = {
-      instagram: trimmedInsta
-    };
-
-    const settingsUrl = "/api/kvdb/settings";
-
-    // 3. Save Settings to Cloud Database link (kvdb.io)
-    try {
-      const response = await fetch(settingsUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settingsData)
-      });
-      if (!response.ok) {
-        await fetch(settingsUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(settingsData)
-        });
-      }
-    } catch (err) {
-      console.error('Failed to save settings to cloud:', err);
-    }
-
-    // 4. Update in-memory states
+    // 2. Update in-memory states
     setCurrentSavedLink(trimmedInsta);
-    setCloudDbUrl(directDbUrl);
 
     setIsSavingSettings(false);
     setSaveSuccessSettings(true);
 
     setCartToast({
-      message: "تم حفظ الإعدادات وقاعدة البيانات ومزامنتها سحابياً بنجاح!",
+      message: "تم حفظ الإعدادات بنجاح!",
       type: 'success'
     });
-
-    // Attempt instant cloud synchronization of products
-    try {
-      await syncFromCloud(directDbUrl);
-    } catch (err) {
-      console.error('Failed to sync products from cloud URL:', err);
-    }
 
     // Close settings modal after 1.5 seconds
     setTimeout(() => {
@@ -1037,7 +721,7 @@ export default function App() {
       }, 1500);
     } catch (err: any) {
       console.error('Error saving product:', err);
-      setFormError('فشلت المزامنة السحابية. يرجى التحقق من اتصالك بالإنترنت والمحاولة مجدداً.');
+      setFormError('حدث خطأ أثناء حفظ المنتج. يرجى المحاولة مجدداً.');
     } finally {
       setIsSavingProduct(false);
     }
@@ -1105,7 +789,7 @@ export default function App() {
           <div className="w-10 h-10 border-3 border-brand-accent/20 border-t-brand-accent rounded-full animate-spin" />
           <h2 className="font-serif font-semibold text-lg text-brand-ink">جاري تحميل المعرض...</h2>
           <p className="text-xs text-brand-ink/60 leading-relaxed">
-            نقوم بجلب أحدث التفاصيل، الأسعار، وتوافر المنتجات مباشرة من قاعدة البيانات السحابية لضمان دقة طلبك.
+            نقوم بتحميل المنتجات والتفاصيل لضمان دقة طلبك.
           </p>
         </div>
       </div>
@@ -1147,7 +831,7 @@ export default function App() {
                   className="flex items-center gap-1.5 bg-[#4F46E5] hover:bg-[#4338CA] active:scale-95 text-white px-3.5 py-1.5 rounded-xs font-semibold text-xs transition-all duration-150 uppercase tracking-wider cursor-pointer"
                 >
                   <Settings className="w-3.5 h-3.5" />
-                  إعدادات المتجر وقاعدة البيانات
+                  إعدادات المتجر
                 </button>
                 <button 
                   id="btn-admin-logout"
@@ -1355,14 +1039,6 @@ export default function App() {
                       alt={product.title}
                       referrerPolicy="no-referrer"
                       onClick={() => {
-                        if (!currentSavedLink || currentSavedLink.trim() === '') {
-                          setCartToast({
-                            message: "عفوا الطلب غير متاح حاليا",
-                            type: 'error'
-                          });
-                          setIsCheckoutUnavailableModalOpen(true);
-                          return;
-                        }
                         setLightbox({
                           images: product.images,
                           index: currentImgIdx,
@@ -1784,7 +1460,7 @@ export default function App() {
                 <div className="flex items-center gap-2">
                   <Settings className="w-4 h-4 text-brand-accent animate-spin" style={{ animationDuration: '6s' }} />
                   <h3 className="font-serif font-semibold text-lg text-brand-ink">
-                    إعدادات المتجر وقاعدة البيانات
+                    إعدادات المتجر
                   </h3>
                 </div>
                 <button
@@ -1813,31 +1489,6 @@ export default function App() {
                   <p className="text-[10px] text-brand-ink/50 mt-1 leading-relaxed">
                     سيتم توجيه العملاء إلى هذا الحساب تلقائياً عند إتمام الطلب وإرسال تفاصيل السلة.
                   </p>
-                </div>
-
-                {/* 4. Cloud Database URL */}
-                <div className="text-right border-t border-brand-ink/10 pt-4" dir="rtl">
-                  <div className="flex items-center justify-between mb-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setCloudDbUrlInput('/api/kvdb/products')}
-                      className="text-[10px] text-brand-accent hover:underline font-bold"
-                    >
-                      استعادة الرابط الافتراضي
-                    </button>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-brand-ink/80">
-                      رابط قاعدة البيانات السحابية (JSON Cloud Sync)
-                    </label>
-                  </div>
-                  <input
-                    type="text"
-                    placeholder="رابط API لحفظ المنتجات"
-                    value={cloudDbUrlInput}
-                    onChange={(e) => setCloudDbUrlInput(e.target.value)}
-                    className="w-full bg-brand-bg text-brand-ink text-xs px-3.5 py-2.5 rounded-none border border-brand-ink/15 focus:outline-none focus:border-brand-accent text-left font-mono"
-                    dir="ltr"
-                    required
-                  />
                 </div>
 
                 {/* Actions */}
