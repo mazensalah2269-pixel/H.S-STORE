@@ -165,13 +165,6 @@ export default function App() {
   const saveProducts = async (updatedProducts: Product[]) => {
     setProducts(updatedProducts);
     localStorage.setItem('hs_handmade_products', JSON.stringify(updatedProducts));
-    
-    // Sync with local backup API silently in background if needed (no-op if server is not run)
-    fetch('/api/products', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ products: updatedProducts })
-    }).catch(() => {});
 
     setCartToast({
       message: 'تم حفظ التعديلات بنجاح!',
@@ -211,58 +204,6 @@ export default function App() {
   const [formImages, setFormImages] = useState<string[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState<boolean>(false);
-
-  // Form Autosave local backup auto-save mechanism state
-  const [draftToRestore, setDraftToRestore] = useState<any | null>(null);
-
-  // Track changes to form inputs to auto-save to localStorage
-  useEffect(() => {
-    if (isProductModalOpen) {
-      const hasContent = formTitle.trim() !== '' || formDescription.trim() !== '' || formImages.length > 0 || formPrice !== '';
-      if (hasContent) {
-        const draft = {
-          title: formTitle,
-          category: formCategory,
-          price: formPrice,
-          discountPercentage: formDiscountPercentage,
-          description: formDescription,
-          images: formImages,
-          editingId: editingProduct?.id || null,
-          timestamp: Date.now()
-        };
-        localStorage.setItem('hs_handmade_form_draft', JSON.stringify(draft));
-      }
-    }
-  }, [formTitle, formCategory, formPrice, formDiscountPercentage, formDescription, formImages, editingProduct, isProductModalOpen]);
-
-  // Check for saved draft on opening the modal
-  useEffect(() => {
-    if (isProductModalOpen) {
-      const saved = localStorage.getItem('hs_handmade_form_draft');
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved);
-          const draftIsEditing = parsed.editingId !== null;
-          const currentIsEditing = editingProduct !== null;
-          
-          // Verify if draft matches current mode (either editing the same product, or both creating a new product)
-          const matchesMode = currentIsEditing 
-            ? (draftIsEditing && parsed.editingId === editingProduct.id)
-            : !draftIsEditing;
-
-          if (matchesMode && (parsed.title || parsed.description || parsed.images?.length > 0 || parsed.price)) {
-            setDraftToRestore(parsed);
-          } else {
-            setDraftToRestore(null);
-          }
-        } catch (e) {
-          console.error('Error parsing draft from localStorage:', e);
-        }
-      }
-    } else {
-      setDraftToRestore(null);
-    }
-  }, [isProductModalOpen, editingProduct]);
 
   // Carousel slider positions per product ID
   const [carouselIndexes, setCarouselIndexes] = useState<Record<string, number>>({});
@@ -706,7 +647,6 @@ export default function App() {
 
     try {
       await saveProducts(updatedProducts);
-      localStorage.removeItem('hs_handmade_form_draft');
       setSaveSuccessProduct(true);
       
       if (typeof (window as any).renderAppGridDisplay === 'function') {
@@ -1570,51 +1510,7 @@ export default function App() {
                 </div>
               )}
 
-              {draftToRestore && (
-                <div className="mb-5 p-4 bg-brand-bg border border-brand-accent/20 rounded-none text-xs text-brand-ink flex flex-col sm:flex-row items-center justify-between gap-3" dir="rtl">
-                  <div className="flex items-center gap-3 text-right">
-                    <Database className="w-5 h-5 text-brand-accent shrink-0" />
-                    <div>
-                      <span className="font-bold block text-sm">مسودة محفوظة متوفرة (Draft Backup Available)</span>
-                      <span className="text-brand-ink/65 text-[10px]">لديك نسخة محفوظة تلقائياً من تعديلاتك السابقة على هذا المنتج.</span>
-                    </div>
-                  </div>
-                  <div className="flex gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setFormTitle(draftToRestore.title || '');
-                        setFormCategory(draftToRestore.category || 'Shawls & Scarves');
-                        setFormPrice(draftToRestore.price || '');
-                        setFormDiscountPercentage(draftToRestore.discountPercentage || '');
-                        setFormDescription(draftToRestore.description || '');
-                        setFormImages(draftToRestore.images || []);
-                        setDraftToRestore(null);
-                        setCartToast({
-                          message: "تمت استعادة المسودة بنجاح!",
-                          type: 'success'
-                        });
-                        setTimeout(() => setCartToast(null), 2500);
-                      }}
-                      className="bg-brand-accent hover:bg-brand-accent/90 text-white px-3 py-1.5 rounded-none font-bold text-[10px] transition-colors cursor-pointer"
-                    >
-                      استعادة (Restore)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        localStorage.removeItem('hs_handmade_form_draft');
-                        setDraftToRestore(null);
-                      }}
-                      className="bg-brand-ink/10 hover:bg-brand-ink/15 text-brand-ink px-2.5 py-1.5 rounded-none text-[10px] transition-colors cursor-pointer"
-                    >
-                      تجاهل (Discard)
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              <form onSubmit={handleSaveProduct} className="space-y-5">
+               <form onSubmit={handleSaveProduct} className="space-y-5">
                 
                 {/* Title & Category Grid */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
